@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <title>Rotation Pro - Login</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="min-h-screen bg-slate-900 flex items-center justify-center">
+  <div class="max-w-md w-full bg-slate-800/80 border border-slate-700 rounded-2xl p-8 shadow-xl text-slate-100">
+    <h1 class="text-2xl font-bold mb-1 text-center">🏀 Rotation <span class="text-blue-400">Pro</span></h1>
+    <p class="text-sm text-slate-400 mb-6 text-center">Accedi per gestire le rotazioni della tua squadra</p>
+
+    <form id="login-form" class="space-y-4">
+      <div>
+        <label class="block text-sm mb-1" for="email">Email</label>
+        <input id="email" type="email" required
+               class="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+      </div>
+      <div>
+        <label class="block text-sm mb-1" for="password">Password</label>
+        <input id="password" type="password" required
+               class="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+      </div>
+
+      <p class="text-xs text-slate-400" id="mode-helper">
+        Non hai un account? <button type="button" id="toggle-mode" class="text-blue-400 hover:underline">Registrati</button>
+      </p>
+
+      <button type="submit"
+              class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2.5 rounded-lg text-sm transition">
+        Accedi
+      </button>
+    </form>
+
+    <div class="my-4 flex items-center">
+      <div class="flex-1 h-px bg-slate-700"></div>
+      <span class="px-3 text-xs text-slate-500 uppercase">oppure</span>
+      <div class="flex-1 h-px bg-slate-700"></div>
+    </div>
+
+    <button id="google-btn"
+            class="w-full border border-slate-600 bg-slate-900 hover:bg-slate-800 text-sm py-2.5 rounded-lg flex items-center justify-center gap-2 transition">
+      <span>Continua con Google</span>
+    </button>
+
+    <p id="error-message" class="mt-4 text-sm text-red-400 hidden"></p>
+  </div>
+
+  <script type="module">
+    import { auth, googleProvider } from "./firebase-config.js";
+    import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signInWithPopup, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+
+    const form = document.getElementById("login-form");
+    const emailInput = document.getElementById("email");
+    const passwordInput = document.getElementById("password");
+    const googleBtn = document.getElementById("google-btn");
+    const modeHelper = document.getElementById("mode-helper");
+    const errorEl = document.getElementById("error-message");
+
+    let isRegisterMode = false;
+
+    function showError(msg) {
+      errorEl.textContent = msg;
+      errorEl.classList.remove("hidden");
+    }
+
+    function clearError() {
+      errorEl.textContent = "";
+      errorEl.classList.add("hidden");
+    }
+
+    function updateModeHelper() {
+      if (isRegisterMode) {
+        modeHelper.innerHTML = 'Hai già un account? <button type="button" class="text-blue-400 hover:underline" id="mode-toggle-inner">Accedi</button>';
+      } else {
+        modeHelper.innerHTML = 'Non hai un account? <button type="button" class="text-blue-400 hover:underline" id="mode-toggle-inner">Registrati</button>';
+      }
+      const innerBtn = document.getElementById("mode-toggle-inner");
+      if (innerBtn) {
+        innerBtn.addEventListener("click", () => {
+          isRegisterMode = !isRegisterMode;
+          clearError();
+          updateModeHelper();
+        });
+      }
+    }
+
+    updateModeHelper();
+
+    onAuthStateChanged(auth, (user) => {
+      if (user) {
+        window.location.href = "index.html";
+      }
+    });
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      clearError();
+      const email = emailInput.value.trim();
+      const password = passwordInput.value.trim();
+      if (!email || !password) {
+        showError("Compila email e password.");
+        return;
+      }
+      try {
+        if (isRegisterMode) {
+          await createUserWithEmailAndPassword(auth, email, password);
+        } else {
+          await signInWithEmailAndPassword(auth, email, password);
+        }
+        window.location.href = "index.html";
+      } catch (err) {
+        console.error(err);
+        showError("Errore: " + (err.code || err.message || "impossibile completare l'operazione"));
+      }
+    });
+
+    googleBtn.addEventListener("click", async () => {
+      clearError();
+      try {
+        await signInWithPopup(auth, googleProvider);
+        window.location.href = "index.html";
+      } catch (err) {
+        console.error(err);
+        showError("Errore Google Login: " + (err.code || err.message || ""));
+      }
+    });
+  </script>
+</body>
+</html>
