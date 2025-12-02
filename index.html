@@ -197,12 +197,13 @@
         // CHIAVE DI SALVATAGGIO MODIFICATA (v7 - Aggiunta Wall Clock per Densità)
         const STORAGE_KEY = 'basket_rotation_local_v7'; 
         
-        // La costante STINT_D_PLACEHOLDER è stata rimossa, ora la densità è calcolata dinamicamente.
-
         // Ristrutturato gameState per gestire i tempi di tutti i quarti
         let gameState = { players: [], isRunning: false, lastUpdateTime: 0, currentQuarter: DEFAULT_QUARTER, quarterTimes: {} };
         let timerInterval = null;
         let selectedPlayerId = null;
+
+        // NEW: Interval per l'aggiornamento continuo del Wall Clock (minT), Densità e PMI
+        let wallClockInterval = null; 
 
         // --- HELPER FUNCTIONS ---
 
@@ -225,6 +226,28 @@
         }
         function showMessage(t) { document.getElementById('modal-text').textContent = t; document.getElementById('message-modal').classList.remove('hidden'); }
         
+        // --- WALL CLOCK TRACKER ---
+
+        function startWallClockTracker() {
+            // Solo se la partita è in corso e l'intervallo non è già attivo
+            if (gameState.players.length > 0 && !wallClockInterval) {
+                // Aggiorna l'UI ogni secondo per ricalcolare minT, Densità e PMI
+                wallClockInterval = setInterval(() => {
+                    // Controlla che il quarto non sia finito
+                    if (getRemainingTime() > 0) { 
+                        updateUI(); 
+                    }
+                }, 1000); // 1 secondo
+            }
+        }
+        
+        function stopWallClockTracker() {
+             if (wallClockInterval) {
+                clearInterval(wallClockInterval);
+                wallClockInterval = null;
+            }
+        }
+
         // --- INIZIALIZZAZIONE E SALVATAGGIO ---
 
         window.onload = function() {
@@ -246,7 +269,11 @@
                         QUARTER_ORDER.forEach(q => { gameState.quarterTimes[q] = QUARTER_DURATIONS_MS[q] || 0; });
                     }
                     
-                    if (gameState.players.length > 0) { showSetupOrGame(true); updateUI(); } 
+                    if (gameState.players.length > 0) { 
+                        showSetupOrGame(true); 
+                        updateUI(); 
+                        startWallClockTracker(); // AVVIA IL TRACKER AL CARICAMENTO
+                    } 
                     else { showSetupOrGame(false); }
                 } catch(e) { console.error("Err loading", e); showSetupOrGame(false); }
             } else { showSetupOrGame(false); }
@@ -303,6 +330,7 @@
                 }] 
             }]);
             saveGameState(); showSetupOrGame(true); updateUI();
+            startWallClockTracker(); // AVVIA IL TRACKER DOPO L'INIZIALIZZAZIONE
         }
 
         // --- TIMER AND QUARTER LOGIC ---
@@ -310,8 +338,14 @@
         function toggleTimer() {
             if (getRemainingTime() <= 0) { showMessage("Fine quarto."); gameState.isRunning = false; saveGameState(); updateUI(); return; }
             gameState.isRunning = !gameState.isRunning;
-            if (gameState.isRunning) { gameState.lastUpdateTime = Date.now(); timerInterval = setInterval(updateTimer, 100); } 
-            else { clearInterval(timerInterval); }
+            if (gameState.isRunning) { 
+                gameState.lastUpdateTime = Date.now(); 
+                timerInterval = setInterval(updateTimer, 100); 
+                startWallClockTracker(); // Assicura che il Wall Clock Tracker sia attivo
+            } 
+            else { 
+                clearInterval(timerInterval); 
+            }
             saveGameState(); updateUI();
         }
 
@@ -357,6 +391,7 @@
             // 2. Imposta a 0:00 se il quarto è effettivamente finito
             if(isTimeOut) {
                 setRemainingTime(0);
+                stopWallClockTracker(); // STOP IL WALL CLOCK TRACKER ALLA FINE PARTITA/QUARTO
             }
 
             const nextQ = NEXT_QUARTER[gameState.currentQuarter];
@@ -371,12 +406,14 @@
                         perf.rotations.push({ start: 0, end: null, wallClockStart: Date.now(), wallClockEnd: null }); // NUOVO Wall Clock Start
                     });
                     showMessage(`Fine Quarto! Passaggio a ${nextQ}.`);
+                    startWallClockTracker(); // RIAVVIA IL TRACKER PER IL NUOVO QUARTO
                 } else {
                     // Se non è finito (e.g. cambio quarto manuale)
                     showMessage(`Tempo salvato: ${formatTime(remainingTime)}.`);
                 }
             } else { 
                 showMessage("Partita Finita!"); 
+                stopWallClockTracker(); // STOP DEFINITIVO
             }
             saveGameState(); updateUI();
         }
@@ -389,6 +426,10 @@
             setRemainingTime(newTime);
 
             if(gameState.isRunning) gameState.lastUpdateTime = Date.now();
+            
+            // Se il tempo viene riportato sopra lo zero, assicurati che il wall clock tracker sia attivo
+            if (newTime > 0) startWallClockTracker();
+            
             saveGameState(); updateUI();
         }
 
@@ -403,7 +444,7 @@
             const durationOld = getQuarterDuration(oldQ);
             const remainingOld = gameState.quarterTimes[oldQ] || 0;
             const elapsedOld = durationOld - remainingOld;
-            const wallClockNow = Date.now(); // Wall clock time per la chiusura e l'apertura
+            const wallClockNow = Date.now(); // Wall Clock time per la chiusura e l'apertura
 
             // 2. Aggiorna i tempi di uscita/entrata nel quarto precedente
             updateRotationEndTimes(elapsedOld, wallClockNow); // Chiude le rotazioni con Wall Clock End
@@ -431,6 +472,7 @@
                         });
                     }
                 });
+                startWallClockTracker(); // AVVIA IL TRACKER SE IL NUOVO QUARTO NON È FINITO
             } else {
                  // Il quarto è FINITO (remainingNew === 0). Chiudi forzatamente qualsiasi rotazione aperta
                  gameState.players.forEach(p => { 
@@ -446,6 +488,8 @@
                         }
                     }
                  });
+                 // Se il nuovo quarto è finito, ferma il tracker se il game timer è fermo
+                 if (!gameState.isRunning) stopWallClockTracker();
             }
 
             saveGameState(); updateUI();
@@ -601,7 +645,8 @@
          * @returns {number} Il punteggio PMI.
          */
         function calcPMI(consecutiveMs, stintD) {
-            if (consecutiveMs === 0 || stintD === 0) return 0;
+            // Aggiungo un controllo per evitare PMI elevati quando minG è quasi zero
+            if (consecutiveMs < 1000 || stintD === 0) return 0;
             
             const minG_minutes = consecutiveMs / 60000; // minG convertito in minuti
             
@@ -1066,6 +1111,7 @@
             if (gameState.players.length > 0) {
                 showSetupOrGame(true);
                 updateUI();
+                startWallClockTracker(); // Assicura che sia attivo anche se il timer è fermo
             } else {
                 showSetupOrGame(false);
             }
