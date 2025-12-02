@@ -170,14 +170,14 @@
                         <h2 class="font-bold text-gray-500 dark:text-gray-400 uppercase text-sm tracking-wider">Panchina</h2>
                         <span class="text-xs bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded text-gray-500">Tocca</span>
                     </div>
-                    <div id="bench-area" class="bench-area p-3 rounded-b-xl flex-1 overflow-y-auto custom-scroll grid grid-cols-2 lg:grid-cols-1 gap-3 content-start shadow-inner" ondrop="handleDrop(event)" ondragover="allowDrop(event)" onclick="handleAreaClick('bench')"></div>
+                    <div id="bench-area" class="bench-area p-3 rounded-b-xl flex-1 overflow-y-auto custom-scroll grid grid-cols-2 lg:grid-cols-1 gap-3 content-start shadow-inner" onclick="handleAreaClick('bench')"></div>
                 </div>
                 
                 <div class="lg:col-span-9 flex flex-col min-h-0 order-1 lg:order-2 space-y-4">
                     <div class="relative rounded-2xl overflow-hidden shadow-2xl border-[6px] border-white dark:border-gray-500 flex-1 flex flex-col">
                         <div class="absolute top-0 left-0 bg-black/50 text-white px-4 py-1 rounded-br-xl z-20 text-sm font-bold uppercase backdrop-blur-md shadow-sm">In Campo</div>
                         <div class="court-lines absolute inset-0 z-0"></div>
-                        <div id="court-area" class="court-area relative z-10 p-4 sm:p-6 flex-1 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 sm:gap-4 content-start items-start" ondrop="handleDrop(event)" ondragover="allowDrop(event)" onclick="handleAreaClick('court')"></div>
+                        <div id="court-area" class="court-area relative z-10 p-4 sm:p-6 flex-1 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 sm:gap-4 content-start items-start" onclick="handleAreaClick('court')"></div>
                     </div>
                     <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 flex flex-col h-48 lg:h-64">
                         <div class="p-3 border-b border-gray-100 dark:border-gray-700 flex justify-between items-center"><h2 class="font-bold text-gray-500 dark:text-gray-400 uppercase text-sm tracking-wider">Tabellino</h2></div>
@@ -501,7 +501,7 @@
             const elapsedNew = durationNew - remainingNew;
 
             if (remainingNew > 0) {
-                gameState.players.filter(p=>p.status==='court').forEach(p => {
+                gameState.players.filter(p => p.status === 'court').forEach(p => {
                     const perf = getPerf(p, newQ);
                     // Aggiungi una nuova rotazione solo se l'ultima è chiusa
                     if(!perf.rotations.length || perf.rotations.at(-1).end !== null) {
@@ -873,28 +873,43 @@
             return details.join(' | ');
         }
         
-        // --- DRAG/DROP AND UI (Logic Invariata) ---
+        // --- DRAG/DROP AND UI (RIMOSSE FUNZIONI DRAG/DROP) ---
 
-        function allowDrop(ev) { ev.preventDefault(); }
-        function handleDragStart(ev, id) { ev.dataTransfer.setData("pid", id); ev.target.classList.add('is-dragging'); }
-        function handleDragEnd(ev) { ev.target.classList.remove('is-dragging'); }
-        function handleDrop(ev) {
-            ev.preventDefault(); if (ev.target.closest('.player-card')) return; 
-            processDrop(ev.dataTransfer.getData("pid"), ev.currentTarget.id === 'court-area' ? 'court' : 'bench');
-        }
-        function handleDropOnPlayer(ev, tid) { ev.preventDefault(); ev.stopPropagation(); processSwap(ev.dataTransfer.getData("pid"), tid); }
+        // Funzioni per l'interazione Tap-in/Tap-out
+
         function handlePlayerClick(ev, id) {
             ev.stopPropagation();
-            if (!selectedPlayerId) { selectedPlayerId = id; updateUI(); return; }
-            if (selectedPlayerId === id) { selectedPlayerId = null; updateUI(); return; }
-            processSwap(selectedPlayerId, id); selectedPlayerId = null;
+            if (!selectedPlayerId) { 
+                selectedPlayerId = id; 
+                updateUI(); 
+                return; 
+            }
+            if (selectedPlayerId === id) { 
+                selectedPlayerId = null; 
+                updateUI(); 
+                return; 
+            }
+            // Swap tra il giocatore selezionato e quello appena toccato
+            processSwap(selectedPlayerId, id); 
+            selectedPlayerId = null;
         }
-        function handleAreaClick(areaType) { if (selectedPlayerId) { processDrop(selectedPlayerId, areaType); selectedPlayerId = null; } }
+
+        function handleAreaClick(areaType) { 
+            // Se un giocatore è selezionato, lo spostiamo nell'area
+            if (selectedPlayerId) { 
+                processDrop(selectedPlayerId, areaType); 
+                selectedPlayerId = null; 
+            } 
+        }
 
         function processDrop(pid, newStatus) {
             const p = gameState.players.find(x => x.id === pid);
             if (!p || p.status === newStatus) return;
-            if (getRemainingTime() > 0 && newStatus === 'court' && gameState.players.filter(x => x.status === 'court').length >= 5) return showMessage("Massimo 5 in campo!");
+            
+            // Logica per impedire di avere più di 5 giocatori in campo toccando l'area "court"
+            if (getRemainingTime() > 0 && newStatus === 'court' && gameState.players.filter(x => x.status === 'court').length >= 5) {
+                return showMessage("Massimo 5 in campo!");
+            }
             
             const oldStatus = p.status;
             p.status = newStatus;
@@ -906,23 +921,27 @@
             const p1 = gameState.players.find(x => x.id === id1);
             const p2 = gameState.players.find(x => x.id === id2);
             if (!p1 || !p2 || p1.id === p2.id) return;
+            
+            // Assicuriamo che lo scambio avvenga solo tra Campo <-> Panchina
             if (p1.status !== p2.status) {
                 const bench = p1.status === 'bench' ? p1 : p2;
                 const court = p1.status === 'bench' ? p2 : p1;
                 
-                if (getRemainingTime() > 0 && gameState.players.filter(x => x.status === 'court').length > 5) {
-                }
-
                 bench.status = 'court'; 
                 court.status = 'bench';
                 
+                // Aggiorniamo le statistiche per entrambi i giocatori
                 handleSubstitution(court, 'court', 'bench'); 
                 handleSubstitution(bench, 'bench', 'court');
                 
                 saveGameState(); updateUI();
-            } else { showMessage("Scambio valido solo Campo <-> Panchina."); selectedPlayerId = null; updateUI(); }
+            } else { 
+                showMessage("Scambio valido solo Campo <-> Panchina."); 
+                selectedPlayerId = null; 
+                updateUI(); 
+            }
         }
-
+        
         globalThis.toggleTheme = (save=true) => {
             const d = document.documentElement.classList.toggle('dark');
             if(save) localStorage.setItem('theme', d?'dark':'light');
@@ -968,10 +987,9 @@
                 const statsVal = isCourt ? 'court-text-primary' : 'text-gray-600 dark:text-gray-300';
                 const warnClass = warn ? 'text-red-500 font-bold animate-pulse' : (isCourt ? 'text-white' : 'text-gray-500');
 
+                // Rimosso dragabble="true" e tutti i gestori di eventi ondrag/ondrop
                 const html = `
                 <div id="${p.id}" class="player-card flex flex-col justify-between p-3 ${selCls} ${cardBg} ${border} min-h-[9rem] h-auto w-full"
-                     draggable="true" ondragstart="handleDragStart(event, '${p.id}')" ondragend="handleDragEnd(event)"
-                     ondrop="handleDropOnPlayer(event, '${p.id}')" ondragover="allowDrop(event)"
                      onclick="handlePlayerClick(event, '${p.id}')">
                     <div class="flex justify-between items-start">
                         <span class="jersey-number text-2xl ${numClass}">${p.number}</span>
