@@ -266,10 +266,8 @@
                     if (gameState.players.length > 0) { showSetupOrGame(true); updateUI(); } 
                     else { showSetupOrGame(false); }
                     
-                    // Se il timer era in esecuzione, lo riavviamo con la logica corretta
-                    if (loaded.isRunning || gameState.absoluteWallClockStart > 0) {
-                        gameState.isRunning = loaded.isRunning;
-                        // Imposta timerInterval se non è già attivo
+                    // Se il Wall Clock era attivo, riavviamo l'intervallo
+                    if (gameState.absoluteWallClockStart > 0) { 
                         if (timerInterval === null) {
                             timerInterval = setInterval(updateTimer, 100); 
                         }
@@ -292,8 +290,6 @@
             const dataToSave = { 
                 ...gameState, 
                 // Salviamo lo stato di isRunning, ma lastUpdateTime non è necessario
-                // salvarlo se la logica di updateTimer è corretta.
-                // Lo teniamo per consistenza, ma il suo valore non è usato al load.
                 lastUpdateTime: Date.now() 
             };
             localStorage.setItem(STORAGE_KEY, JSON.stringify(dataToSave));
@@ -319,7 +315,7 @@
             gameState.quarterTimes = {};
             QUARTER_ORDER.forEach(q => { gameState.quarterTimes[q] = QUARTER_DURATIONS_MS[q] || 0; });
 
-            // NUOVO: Reset completo del Wall Clock
+            // Reset Wall Clock
             gameState.totalWallTimePlayed = 0;
             gameState.absoluteWallClockStart = 0;
 
@@ -337,28 +333,24 @@
         function toggleTimer() {
             if (getRemainingTime() <= 0) { showMessage("Fine quarto."); gameState.isRunning = false; saveGameState(); updateUI(); return; }
             
-            const wasRunning = gameState.isRunning;
             gameState.isRunning = !gameState.isRunning;
             
             if (gameState.isRunning) { 
                 // Se il timer parte, impostiamo l'ultima ora di aggiornamento.
-                // Nota: la logica di Wall Clock non ha bisogno di questo per la ripresa.
                 gameState.lastUpdateTime = Date.now(); 
 
-                // Wall Clock Start Logic: Se non è ancora partito, impostiamo l'inizio assoluto
+                // Wall Clock Start Logic: Se non è ancora partito (è 0 per un nuovo quarto), lo impostiamo al primo avvio
                 if (gameState.absoluteWallClockStart === 0) {
                     gameState.absoluteWallClockStart = Date.now();
                 }
                 
-                // Avvia l'intervallo se non è già attivo (solo per garantire l'aggiornamento continuo)
+                // Avvia l'intervallo se non è già attivo
                 if (timerInterval === null) {
                     timerInterval = setInterval(updateTimer, 100);
                 }
 
             } else { 
-                // Se il timer va in pausa, non interrompiamo l'intervallo.
-                // Il Wall Clock deve continuare e l'intervallo ci serve per aggiornarlo.
-                // **CRUCIALE:** aggiorniamo lastUpdateTime al momento della pausa.
+                // Se il timer va in pausa
                 gameState.lastUpdateTime = Date.now();
             }
             saveGameState(); updateUI();
@@ -371,38 +363,24 @@
             
             // 1. Update Game Clock (Solo se è in esecuzione)
             if (gameState.isRunning) {
-                // Se è in esecuzione, calcoliamo la differenza di tempo
                 diff = now - gameState.lastUpdateTime;
                 newTime = getRemainingTime() - diff; 
             }
             
-            // **CRUCIALE CORREZIONE:**
-            // Aggiorniamo lastUpdateTime a *now* in ogni caso. 
-            // Se `isRunning` è `false`, `diff` al prossimo avvio sarà 0 o molto piccolo, 
-            // prevenendo salti temporali.
+            // Aggiorniamo lastUpdateTime a *now* in ogni caso.
             gameState.lastUpdateTime = now;
 
             // 2. Update Wall Clock (Tempo Totale di Gioco Reale)
-            // L'orologio totale corre continuamente (anche durante la pausa del timer di gioco)
-            // ma si ferma solo quando il *Game Timer* è 0.
-            if (gameState.absoluteWallClockStart > 0) { 
-                if (newTime > 0) { // Wall Clock runs while game timer > 0
-                    gameState.totalWallTimePlayed = now - gameState.absoluteWallClockStart;
-                } else {
-                    // Quarter just ended (newTime <= 0). Finalize the wall clock time.
-                    if (gameState.totalWallTimePlayed < (now - gameState.absoluteWallClockStart)) {
-                        gameState.totalWallTimePlayed = now - gameState.absoluteWallClockStart; 
-                    }
-                    // Non è necessario resettare absoluteWallClockStart qui, ma lo facciamo in handleQuarterEnd
-                    // per preparare l'avvio del prossimo quarto.
-                }
+            // L'orologio totale corre finché è stato avviato e il Game Timer > 0.
+            if (gameState.absoluteWallClockStart > 0 && newTime > 0) { 
+                gameState.totalWallTimePlayed = now - gameState.absoluteWallClockStart;
             }
             
             // 3. Gestione Fine Quarto
             if (newTime <= 0) { 
                 if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
                 setRemainingTime(0); 
-                handleQuarterEnd(true); 
+                handleQuarterEnd(true); // isTimeOut = true
             } else {
                 // Solo se il Game Timer era in esecuzione, salviamo il tempo aggiornato
                 if (gameState.isRunning) {
@@ -425,27 +403,22 @@
             // 2. Imposta a 0:00 se il quarto è effettivamente finito
             if(isTimeOut) {
                 setRemainingTime(0);
+                
+                // *** LOGICA DI RESET WALL CLOCK ***
+                gameState.totalWallTimePlayed = 0; 
+                gameState.absoluteWallClockStart = 0; 
             }
 
             const nextQ = NEXT_QUARTER[gameState.currentQuarter];
             if (nextQ) {
                 if(isTimeOut) {
-                    // *** Riavviare il Wall Clock: ***
-                    // Per il nuovo quarto, dobbiamo azzerare il punto di partenza del Wall Clock
-                    // in modo che l'accumulo riprenda dal punto finale del quarto precedente.
-                    // (Tempo attuale - Tempo Totale Giocato)
-                    if(gameState.absoluteWallClockStart > 0) {
-                        gameState.absoluteWallClockStart = Date.now() - gameState.totalWallTimePlayed;
-                    }
-                    
                     gameState.currentQuarter = nextQ; 
                     
                     gameState.players.filter(p => p.status === 'court').forEach(p => {
                         let perf = getPerf(p, nextQ); 
-                        // Correzione: Se il tempo è 0 (fine quarto), la rotazione inizia a 0 per il nuovo quarto.
                         perf.rotations.push({ start: 0, end: null }); 
                     });
-                    showMessage(`Fine Quarto! Passaggio a ${nextQ}.`);
+                    showMessage(`Fine Quarto! Passaggio a ${nextQ}. Il cronometro totale è resettato.`);
                 } else {
                     showMessage(`Tempo salvato: ${formatTime(getRemainingTime())}.`);
                 }
@@ -471,10 +444,10 @@
             if (newQ === gameState.currentQuarter) return;
 
             // 1. Interrompi il timer e salva il tempo del quarto precedente
-            const wasRunning = gameState.isRunning;
-            if (wasRunning) { gameState.isRunning = false; }
+            gameState.isRunning = false; 
+            if (timerInterval) { clearInterval(timerInterval); timerInterval = null; } 
             
-            // **CRUCIALE:** Aggiorna lastUpdateTime al momento del cambio quarto per evitare salti
+            // Aggiorna lastUpdateTime al momento del cambio quarto per evitare salti
             gameState.lastUpdateTime = Date.now(); 
 
             const oldQ = gameState.currentQuarter;
@@ -488,12 +461,9 @@
             // 3. Imposta il nuovo quarto
             gameState.currentQuarter = newQ; 
             
-            // *** Riavviare il Wall Clock: ***
-            // Se il Wall Clock si era fermato a 0:00 e si cambia quarto, 
-            // dobbiamo ripristinare il punto di partenza
-            if(gameState.absoluteWallClockStart > 0) {
-                gameState.absoluteWallClockStart = Date.now() - gameState.totalWallTimePlayed;
-            }
+            // *** LOGICA DI RESET WALL CLOCK SU CAMBIO MANUALE ***
+            gameState.totalWallTimePlayed = 0; 
+            gameState.absoluteWallClockStart = 0;
 
             // 4. Aggiorna le rotazioni nel nuovo quarto
             const durationNew = getQuarterDuration(newQ);
@@ -518,11 +488,6 @@
                  });
             }
             
-            // Riavviamo l'intervallo se il Wall Clock è attivo
-            if (gameState.absoluteWallClockStart > 0 && timerInterval === null) {
-                 timerInterval = setInterval(updateTimer, 100);
-            }
-
             saveGameState(); updateUI();
         }
 
@@ -873,9 +838,7 @@
             return details.join(' | ');
         }
         
-        // --- DRAG/DROP AND UI (RIMOSSE FUNZIONI DRAG/DROP) ---
-
-        // Funzioni per l'interazione Tap-in/Tap-out
+        // --- FUNZIONI DI INTERAZIONE (Tap-in/Tap-out) ---
 
         function handlePlayerClick(ev, id) {
             ev.stopPropagation();
