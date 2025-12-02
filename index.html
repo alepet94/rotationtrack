@@ -100,10 +100,6 @@
                 <button onclick="exportToCSV()" class="p-2 rounded-full bg-blue-600 dark:bg-blue-700 text-white shadow-sm hover:shadow-md transition active:scale-95 text-xs font-bold uppercase" title="Esporta Statistiche in CSV">
                     CSV
                 </button>
-                <button id="theme-toggle" onclick="toggleTheme()" class="p-2 rounded-full bg-white dark:bg-gray-800 text-gray-800 dark:text-yellow-400 shadow-sm hover:shadow-md transition">
-                    <svg id="sun-icon" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
-                    <svg id="moon-icon" class="h-6 w-6 hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path></svg>
-                </button>
             </div>
         </header>
         
@@ -245,7 +241,6 @@
                     else { showSetupOrGame(false); }
                 } catch(e) { console.error("Err loading", e); showSetupOrGame(false); }
             } else { showSetupOrGame(false); }
-            if(localStorage.getItem('theme')==='dark') toggleTheme(false); 
             
             // Inizializza il campo avversario, se salvato in localStorage
             const savedOpponentName = localStorage.getItem('opponentName');
@@ -732,12 +727,7 @@
             } else { showMessage("Scambio valido solo Campo <-> Panchina."); selectedPlayerId = null; updateUI(); }
         }
 
-        globalThis.toggleTheme = (save=true) => {
-            const d = document.documentElement.classList.toggle('dark');
-            if(save) localStorage.setItem('theme', d?'dark':'light');
-            document.getElementById('sun-icon').classList.toggle('hidden', !d);
-            document.getElementById('moon-icon').classList.toggle('hidden', d);
-        }
+        // FUNZIONE toggleTheme RIMOSSA (dark mode fissa)
 
         // --- EXPORT CSV AGGIORNATO ---
 
