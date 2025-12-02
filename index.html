@@ -191,8 +191,8 @@
         const NEXT_QUARTER = { 'Q1': 'Q2', 'Q2': 'Q3', 'Q3': 'Q4', 'Q4': 'OT', 'OT': '2OT' };
         const DEFAULT_QUARTER = 'Q1';
         
-        // CHIAVE DI SALVATAGGIO AGGIORNATA (v8 - Modifiche UI PMI)
-        const STORAGE_KEY = 'basket_rotation_local_v8'; 
+        // CHIAVE DI SALVATAGGIO AGGIORNATA (v9 - Fix PMI/wallClockEnd storage)
+        const STORAGE_KEY = 'basket_rotation_local_v9'; 
 
         // Ristrutturato gameState per gestire i tempi di tutti i quarti
         let gameState = { players: [], isRunning: false, lastUpdateTime: 0, currentQuarter: DEFAULT_QUARTER, quarterTimes: {} };
@@ -285,8 +285,8 @@
             QUARTER_ORDER.forEach(q => { gameState.quarterTimes[q] = QUARTER_DURATIONS_MS[q] || 0; });
 
             gameState.isRunning = false; gameState.lastUpdateTime = 0;
-            // Aggiungo wallClockStart alla prima rotazione in campo
-            gameState.players.filter(p => p.status === 'court').forEach(p => p.performance = [{ quarter: DEFAULT_QUARTER, rotations: [{ start: 0, end: null, wallClockStart: Date.now() }] }]);
+            // Aggiungo wallClockStart alla prima rotazione in campo e wallClockEnd a null
+            gameState.players.filter(p => p.status === 'court').forEach(p => p.performance = [{ quarter: DEFAULT_QUARTER, rotations: [{ start: 0, end: null, wallClockStart: Date.now(), wallClockEnd: null }] }]);
             saveGameState(); showSetupOrGame(true); updateUI();
         }
 
@@ -321,8 +321,9 @@
             
             // 1. Finalizza le rotazioni per il quarto che sta finendo
             const quarterDuration = getQuarterDuration();
-            const elapsed = quarterDuration - getRemainingTime();
-            updateRotationEndTimes(elapsed);
+            const remaining = getRemainingTime();
+            const elapsed = quarterDuration - remaining;
+            updateRotationEndTimes(elapsed); // Chiude le rotazioni e salva wallClockEnd
 
             // 2. Imposta a 0:00 se il quarto è effettivamente finito
             if(isTimeOut) {
@@ -339,7 +340,7 @@
                     gameState.players.filter(p => p.status === 'court').forEach(p => {
                         let perf = getPerf(p, nextQ); 
                         // NUOVO: La nuova rotazione inizia a 0 sul Game Clock e Wall Clock a Date.now()
-                        perf.rotations.push({ start: 0, end: null, wallClockStart: Date.now() });
+                        perf.rotations.push({ start: 0, end: null, wallClockStart: Date.now(), wallClockEnd: null });
                     });
                     showMessage(`Fine Quarto! Passaggio a ${nextQ}.`);
                 } else {
@@ -376,7 +377,7 @@
             const elapsedOld = durationOld - remainingOld;
             
             // 2. Aggiorna i tempi di uscita/entrata nel quarto precedente
-            updateRotationEndTimes(elapsedOld);
+            updateRotationEndTimes(elapsedOld); // Chiude le rotazioni e salva wallClockEnd
             
             // 3. Imposta il nuovo quarto
             gameState.currentQuarter = newQ; 
@@ -393,8 +394,8 @@
                     const perf = getPerf(p, newQ);
                     // Apre una rotazione se non ce n'è una aperta (end === null)
                     if(!perf.rotations.length || perf.rotations.at(-1).end !== null) {
-                        // Aggiungo wallClockStart
-                        perf.rotations.push({start:elapsedNew, end:null, wallClockStart: Date.now() });
+                        // Aggiungo wallClockStart e wallClockEnd a null
+                        perf.rotations.push({start:elapsedNew, end:null, wallClockStart: Date.now(), wallClockEnd: null });
                     }
                 });
             } else {
@@ -404,7 +405,8 @@
                     if(perf.rotations.length && perf.rotations.at(-1).end === null) {
                         // Chiudi al tempo massimo trascorso (elapsedNew è la durata completa, es. 600000ms)
                         perf.rotations.at(-1).end = durationNew; 
-                        // Il wallClockEnd non è tracciato, ma se il quarto è finito, il calcolo PMI finale sarà corretto usando il tempo max di gioco.
+                        // Imposta wallClockEnd se non è già impostato, altrimenti non facciamo nulla.
+                        if (!perf.rotations.at(-1).wallClockEnd) perf.rotations.at(-1).wallClockEnd = Date.now(); 
                     }
                  });
             }
@@ -421,7 +423,8 @@
                 // Chiudi solo se è effettivamente aperta
                 if(perf.rotations.length && perf.rotations.at(-1).end === null) {
                     perf.rotations.at(-1).end = elapsed;
-                    // Non serve wallClockEnd, lo stint PMI viene calcolato al momento dell'uscita
+                    // FIX: Salva wallClockEnd quando la rotazione si chiude (uscita dal campo o fine quarto)
+                    perf.rotations.at(-1).wallClockEnd = Date.now(); 
                 }
             });
         }
@@ -443,12 +446,16 @@
             const perf = getPerf(p, gameState.currentQuarter);
             if (oldS === 'court') { 
                 // USCITA
-                if(perf.rotations.length && perf.rotations.at(-1).end === null) perf.rotations.at(-1).end = elapsed; 
+                if(perf.rotations.length && perf.rotations.at(-1).end === null) {
+                    perf.rotations.at(-1).end = elapsed; 
+                    // FIX: Salva wallClockEnd al momento dell'uscita
+                    perf.rotations.at(-1).wallClockEnd = Date.now();
+                }
             } else { 
                 // ENTRATA
                 if(!perf.rotations.length || perf.rotations.at(-1).end !== null) {
                     // Aggiungo wallClockStart al momento dell'entrata
-                    perf.rotations.push({start:elapsed, end:null, wallClockStart: Date.now() });
+                    perf.rotations.push({start:elapsed, end:null, wallClockStart: Date.now(), wallClockEnd: null }); // wallClockEnd è null
                 }
             }
         }
@@ -538,7 +545,7 @@
         /**
          * Calcola il PMI (MetricaFinale) per un singolo stint.
          * Formula: PMI = minG * (1 + stintD) * e^(0.1 * max(0, minG - 6))
-         * @param {object} stint - L'oggetto rotazione ({start, end, wallClockStart})
+         * @param {object} stint - L'oggetto rotazione ({start, end, wallClockStart, wallClockEnd})
          * @param {string} pStatus - Lo status corrente del giocatore ('court' o 'bench')
          * @returns {object} { pmi: number, stintDensity: number }
          */
@@ -563,13 +570,34 @@
             }
             const minG = Math.max(0, gameTimeMs / 60000); // minG in minuti
             
-            // 2. minT (Wall Clock Time, in minuti)
-            const wallClockEnd = stint.end === null ? Date.now() : stint.wallClockStart + (wallClockEnd - stint.wallClockStart); // Non usiamo wallClockEnd salvato, lo calcoliamo al momento per lo stint attivo
-            const wallClockMs = wallClockEnd - stint.wallClockStart;
+            // 2. minT (Wall Clock Time, in minuti) - Calcolo
+            let wallClockMs = 0;
+            let stintD = 0;
+
+            if (stint.end !== null) {
+                // Stint chiuso: usa il tempo salvato.
+                if (stint.wallClockEnd) {
+                    wallClockMs = stint.wallClockEnd - stint.wallClockStart;
+                } else {
+                    // Fallback per dati precedenti o non salvati: usiamo una densità media (0.75) per non rompere TGL.
+                    stintD = 0.75; 
+                    const stressFactor = Math.exp(0.1 * Math.max(0, minG - 6));
+                    const pmi = minG * (1 + stintD) * stressFactor;
+                    return { pmi: pmi, stintDensity: stintD };
+                }
+            } else if (pStatus === 'court' && isCurrentQuarter) {
+                // Stint aperto: usa il tempo in real-time
+                wallClockMs = Date.now() - stint.wallClockStart;
+            } else {
+                // Rotazione aperta ma non in campo: calcolo già bloccato sopra.
+                return { pmi: 0, stintDensity: 0 };
+            }
+
+            // Standard PMI calculation
             const minT = Math.max(0.001, wallClockMs / 60000); // minT in minuti (min 0.001 per evitare divisione per zero)
 
             // 3. Densità (stintD)
-            const stintD = Math.min(1.0, minG / minT); // La densità non può superare 1.0 (il Game Time non può essere > Wall Clock Time)
+            stintD = Math.min(1.0, minG / minT); 
 
             // 4. Fattore di stress per stint > 6 minuti
             const stressFactor = Math.exp(0.1 * Math.max(0, minG - 6));
@@ -784,7 +812,7 @@
         }
         function handleDropOnPlayer(ev, tid) { ev.preventDefault(); ev.stopPropagation(); processSwap(ev.dataTransfer.getData("pid"), tid); }
         
-        // FUNZIONE AGGIORNATA PER IL "TOUCH IN/OUT"
+        // FUNZIONE PER IL "TOUCH IN/OUT"
         function handlePlayerClick(ev, id) {
             ev.stopPropagation();
             
@@ -792,28 +820,26 @@
             const p = gameState.players.find(x => x.id === id);
             if (!p) return;
 
-            if (!selectedPlayerId) { 
-                // FIX: Se nessun giocatore è selezionato, esegui la sostituzione diretta (Touch In/Out)
-                const newStatus = p.status === 'court' ? 'bench' : 'court';
-                processDrop(id, newStatus); 
-                // processDrop gestisce limiti, aggiornamento stat e UI. Non c'è bisogno di selezionare.
-                
-            } else if (selectedPlayerId === id) { 
-                // SECONDO TAP SULLO STESSO GIOCATORE: Deseleziona
+            // TOGGLE SELEZIONE per lo swap
+            if (selectedPlayerId === id) { 
                 selectedPlayerId = null; 
-                updateUI(); 
-                
+            } else if (!selectedPlayerId) { 
+                selectedPlayerId = id; 
             } else {
                 // SECONDO TAP SU ALTRO GIOCATORE: Esegue lo scambio (Swap)
                 processSwap(selectedPlayerId, id); 
-                selectedPlayerId = null; // Pulisce la selezione dopo lo scambio
+                selectedPlayerId = null; 
             }
+
+            // Aggiorna l'UI dopo la selezione/deselezione o dopo lo swap
+            updateUI(); 
         }
         
         function handleAreaClick(areaType) { 
             if (selectedPlayerId) { 
                 processDrop(selectedPlayerId, areaType); 
                 selectedPlayerId = null; 
+                updateUI(); // Necessario per pulire la selezione e aggiornare lo stato
             } 
         }
 
@@ -837,11 +863,6 @@
                 const bench = p1.status === 'bench' ? p1 : p2;
                 const court = p1.status === 'bench' ? p2 : p1;
                 
-                // Pre-check limite
-                if (getRemainingTime() > 0 && gameState.players.filter(x => x.status === 'court').length > 5) {
-                     // Questo caso non dovrebbe succedere con due giocatori con status diversi
-                }
-
                 // Eseguire lo swap
                 bench.status = 'court'; 
                 court.status = 'bench';
@@ -996,7 +1017,9 @@
                 const isCurrentQ = qCode === currentQ;
                 
                 perf.rotations.forEach((r, index) => {
-                    const { pmi, stintDensity } = calcPMI(r, player.status, isCurrentQ);
+                    // Calcolo PMI usa lo stato 'bench' se lo stint è chiuso, e lo stato reale per lo stint aperto
+                    const stintStatus = r.end === null ? player.status : 'bench';
+                    const { pmi, stintDensity } = calcPMI(r, stintStatus, isCurrentQ);
                     
                     if (pmi > 0) {
                         const densityP = (stintDensity * 100).toFixed(0);
@@ -1046,7 +1069,6 @@
                 const numClass = isCourt ? 'court-number' : 'text-gray-500 dark:text-gray-400';
                 const nameClass = isCourt ? 'court-text-primary' : 'text-gray-800 dark:text-white';
                 const statsLabel = isCourt ? 'court-text-secondary' : 'text-gray-400';
-                const statsVal = isCourt ? 'court-text-primary' : 'text-gray-600 dark:text-gray-300';
                 
                 // Classi per i nuovi valori: Load in base al warning, Densità in base al colore
                 const tglValClass = warnPMI ? 'text-red-500 font-bold' : (isCourt ? 'text-green-300' : 'text-green-600 dark:text-green-400');
@@ -1071,12 +1093,12 @@
                         </div>
                         <div class="flex flex-col">
                             <span class="uppercase text-[10px] ${statsLabel}">${isCourt ? 'Densità' : 'Min Tot Gioco'}</span> 
-                            <span class="font-mono text-sm ${isCourt ? densityValClass : statsVal}">
+                            <span class="font-mono text-sm ${isCourt ? densityValClass : nameClass}">
                                 ${isCourt ? (currentStintDensity * 100).toFixed(0) + '%' : formatTime(stats.tot)} 
                             </span>
                         </div>
                         <div class="flex flex-col items-end">
-                            <span class="uppercase text-[10px] ${statsLabel}">${isCourt ? 'Wall Clock (minT)' : 'Riposo'}</span> <span class="font-mono ${consValClass}">${isCourt ? formatTime(currentStintWallClockTimeMs) : formatTime(restTime)}</span>
+                            <span class="uppercase text-[10px] ${statsLabel}">${isCourt ? 'Wall Clock (minT)' : 'Riposo'}</span> <span class="font-mono text-sm ${consValClass}">${isCourt ? formatTime(currentStintWallClockTimeMs) : formatTime(restTime)}</span>
                         </div>
                     </div>
                 </div>`;
