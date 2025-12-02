@@ -519,6 +519,16 @@
             }
             return { tot, currentCons };
         }
+        
+        // --- NUOVA FUNZIONE PER IL PLAYER LOAD ---
+        function calcPlayerLoad(player) {
+            const gameStats = calcGameStats(player);
+            const totalMinutes = gameStats.tot / 60000; // Converti total milliseconds in minuti
+            // Score semplice: Minuti totali giocati * 10 (Max 400 per 4x10min)
+            const loadScore = Math.round(totalMinutes * 10); 
+            return loadScore;
+        }
+        // ----------------------------------------
 
         function calcRestStats(player) {
             if (player.status === 'court') return 0;
@@ -780,7 +790,7 @@
             csvContent += "=== TABELLINO PARTITA ===\r\n";
             
             // 1. Riga Header
-            let header = ["Numero", "Nome", "Q1", "Q2", "Q3", "Q4"];
+            let header = ["Numero", "Nome", "Load Score", "Q1", "Q2", "Q3", "Q4"]; // AGGIUNTO Load Score
             if (QUARTER_ORDER.includes(gameState.currentQuarter) && QUARTER_ORDER.indexOf(gameState.currentQuarter) >= QUARTER_ORDER.indexOf('OT')) {
                 header.push("OT/Extra");
             }
@@ -790,6 +800,7 @@
             // 2. Righe Dati
             sortedPlayers.forEach(p => {
                 const gameStats = calcGameStats(p); 
+                const playerLoad = calcPlayerLoad(p); // Calcola Load
                 const q1 = formatTime(calcQuarterStats(p, 'Q1'));
                 const q2 = formatTime(calcQuarterStats(p, 'Q2'));
                 const q3 = formatTime(calcQuarterStats(p, 'Q3'));
@@ -801,7 +812,7 @@
                 const detailedStints = getDetailedStints(p); 
                 
                 // Racchiudo il nome e i dettagli tra virgolette per gestire i separatori
-                let row = [p.number, `"${p.name}"`, q1, q2, q3, q4]; 
+                let row = [p.number, `"${p.name}"`, playerLoad, q1, q2, q3, q4]; // AGGIUNTO playerLoad
 
                 if (QUARTER_ORDER.includes(gameState.currentQuarter) && QUARTER_ORDER.indexOf(gameState.currentQuarter) >= QUARTER_ORDER.indexOf('OT')) {
                     const ot = formatTime(calcQuarterStats(p, 'OT') + calcQuarterStats(p, '2OT'));
@@ -911,6 +922,7 @@
                 const isCourt = p.status === 'court';
                 const stats = calcGameStats(p); 
                 const restTime = calcRestStats(p);
+                const playerLoad = calcPlayerLoad(p); // <-- NUOVO CALCOLO LOAD
                 const warn = stats.currentCons > 300000; 
                 const isSel = selectedPlayerId === p.id;
                 
@@ -921,6 +933,9 @@
                 const nameClass = isCourt ? 'court-text-primary' : 'text-gray-800 dark:text-white';
                 const statsLabel = isCourt ? 'court-text-secondary' : 'text-gray-400';
                 const statsVal = isCourt ? 'court-text-primary' : 'text-gray-600 dark:text-gray-300';
+                
+                // Classi per i nuovi valori: Load in blu, Cons/Riposo con Warning
+                const loadValClass = isCourt ? 'text-blue-300' : 'text-blue-600 dark:text-blue-400';
                 const warnClass = warn ? 'text-red-500 font-bold animate-pulse' : (isCourt ? 'text-white' : 'text-gray-500');
 
                 // CARD HTML: h-auto e min-h
@@ -934,7 +949,12 @@
                         ${isCourt && warn ? '<span class="animate-pulse text-red-500 text-lg">⚠️</span>' : ''}
                     </div>
                     <div class="font-bold text-base leading-tight line-clamp-2 break-words ${nameClass}">${p.name}</div>
-                    <div class="flex justify-between items-end mt-2 text-xs font-medium">
+                    
+                    <div class="grid grid-cols-3 gap-2 mt-2 text-xs font-medium">
+                        <div class="flex flex-col">
+                            <span class="uppercase text-[10px] ${statsLabel}">Load</span>
+                            <span class="font-mono text-sm font-bold ${loadValClass}">${playerLoad}</span>
+                        </div>
                         <div class="flex flex-col">
                             <span class="uppercase text-[10px] ${statsLabel}">${isCourt ? 'Cons' : 'Riposo'}</span>
                             <span class="font-mono text-sm ${warnClass}">${isCourt ? formatTime(stats.currentCons) : formatTime(restTime)}</span>
@@ -948,17 +968,18 @@
                 (isCourt?ca:ba).innerHTML += html;
             });
 
-            let tbl = '<table class="w-full text-sm text-left dark:text-gray-300"><thead class="bg-gray-50 dark:bg-gray-700/50 sticky top-0 z-10 backdrop-blur-sm text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wider"><tr><th class="px-4 py-3 font-medium">#</th><th class="px-4 py-3 font-medium">Nome</th><th class="px-4 py-3 font-medium text-right">Q1</th><th class="px-4 py-3 font-medium text-right">Q2</th><th class="px-4 py-3 font-medium text-right">Q3</th><th class="px-4 py-3 font-medium text-right">Q4</th>';
+            let tbl = '<table class="w-full text-sm text-left dark:text-gray-300"><thead class="bg-gray-50 dark:bg-gray-700/50 sticky top-0 z-10 backdrop-blur-sm text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wider"><tr><th class="px-4 py-3 font-medium">#</th><th class="px-4 py-3 font-medium">Nome</th><th class="px-4 py-3 font-medium text-right">Load</th><th class="px-4 py-3 font-medium text-right">Q1</th><th class="px-4 py-3 font-medium text-right">Q2</th><th class="px-4 py-3 font-medium text-right">Q3</th><th class="px-4 py-3 font-medium text-right">Q4</th>';
             if (QUARTER_ORDER.includes(gameState.currentQuarter) && QUARTER_ORDER.indexOf(gameState.currentQuarter) >= QUARTER_ORDER.indexOf('OT')) {
                 tbl += '<th class="px-4 py-3 font-medium text-right">OT</th>';
             }
             tbl += '<th class="px-4 py-3 font-medium text-right font-bold text-black dark:text-white">Partita</th></tr></thead><tbody>';
             sorted.forEach(p => {
                 const gameSt = calcGameStats(p);
+                const playerLoad = calcPlayerLoad(p); // Calcola Load anche per la tabella
                 tbl += `<tr class="stats-row border-b border-gray-100 dark:border-gray-700 hover:bg-blue-50 dark:hover:bg-gray-700/50 transition-colors">
                     <td class="px-4 py-2 font-bold text-gray-900 dark:text-white">${p.number}</td>
                     <td class="px-4 py-2 font-medium">${p.name}</td>
-                    <td class="px-4 py-2 text-right font-mono text-gray-500">${formatTime(calcQuarterStats(p, 'Q1'))}</td>
+                    <td class="px-4 py-2 text-right font-bold text-blue-600 dark:text-blue-400">${playerLoad}</td> <td class="px-4 py-2 text-right font-mono text-gray-500">${formatTime(calcQuarterStats(p, 'Q1'))}</td>
                     <td class="px-4 py-2 text-right font-mono text-gray-500">${formatTime(calcQuarterStats(p, 'Q2'))}</td>
                     <td class="px-4 py-2 text-right font-mono text-gray-500">${formatTime(calcQuarterStats(p, 'Q3'))}</td>
                     <td class="px-4 py-2 text-right font-mono text-gray-500">${formatTime(calcQuarterStats(p, 'Q4'))}</td>`;
