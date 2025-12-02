@@ -191,8 +191,8 @@
         const NEXT_QUARTER = { 'Q1': 'Q2', 'Q2': 'Q3', 'Q3': 'Q4', 'Q4': 'OT', 'OT': '2OT' };
         const DEFAULT_QUARTER = 'Q1';
         
-        // CHIAVE DI SALVATAGGIO MODIFICATA (v7 - Aggiunta Wall Clock per PMI)
-        const STORAGE_KEY = 'basket_rotation_local_v7'; 
+        // CHIAVE DI SALVATAGGIO AGGIORNATA (v8 - Modifiche UI PMI)
+        const STORAGE_KEY = 'basket_rotation_local_v8'; 
 
         // Ristrutturato gameState per gestire i tempi di tutti i quarti
         let gameState = { players: [], isRunning: false, lastUpdateTime: 0, currentQuarter: DEFAULT_QUARTER, quarterTimes: {} };
@@ -533,7 +533,7 @@
             return { tot, currentCons };
         }
         
-        // --- NUOVA FUNZIONE PER IL PLAYER LOAD / PMI ---
+        // --- FUNZIONE PER IL PLAYER LOAD / PMI AGGIORNATA ---
         
         /**
          * Calcola il PMI (MetricaFinale) per un singolo stint.
@@ -564,7 +564,7 @@
             const minG = Math.max(0, gameTimeMs / 60000); // minG in minuti
             
             // 2. minT (Wall Clock Time, in minuti)
-            const wallClockEnd = stint.end === null ? Date.now() : Date.now(); // Non abbiamo wallClockEnd salvato, lo calcoliamo al momento
+            const wallClockEnd = stint.end === null ? Date.now() : stint.wallClockStart + (wallClockEnd - stint.wallClockStart); // Non usiamo wallClockEnd salvato, lo calcoliamo al momento per lo stint attivo
             const wallClockMs = wallClockEnd - stint.wallClockStart;
             const minT = Math.max(0.001, wallClockMs / 60000); // minT in minuti (min 0.001 per evitare divisione per zero)
 
@@ -581,13 +581,14 @@
         }
 
         /**
-         * Calcola il Total Game Load (TGL) accumulato per il giocatore.
+         * Calcola il Total Game Load (TGL) accumulato per il giocatore e le metriche dello stint attivo.
          * @param {object} player - L'oggetto giocatore.
-         * @returns {object} { tgl: number, currentStintDensity: number }
+         * @returns {object} { tgl: number, currentStintDensity: number, currentStintWallClockTimeMs: number }
          */
         function calcTotalGameLoad(player) {
             let totalPMI = 0;
             let currentStintDensity = 0;
+            let currentStintWallClockTimeMs = 0; // Wall Clock Time (minT) per lo stint attivo
             const currentQ = gameState.currentQuarter;
 
             player.performance.forEach(perf => {
@@ -601,15 +602,16 @@
                     
                     totalPMI += pmi;
                     
-                    // Se è lo stint attivo, salva la densità
+                    // Se è lo stint attivo, salva la densità e il Wall Clock Time (minT)
                     if (isCurrentStint) {
                         currentStintDensity = stintDensity;
+                        currentStintWallClockTimeMs = Date.now() - r.wallClockStart; // minT per lo stint attivo
                     }
                 });
             });
 
-            // Arrotonda il TGL all'intero più vicino, come suggerito dal contesto dei carichi (15, 35)
-            return { tgl: Math.round(totalPMI), currentStintDensity: currentStintDensity };
+            // Arrotonda il TGL all'intero più vicino
+            return { tgl: Math.round(totalPMI), currentStintDensity: currentStintDensity, currentStintWallClockTimeMs };
         }
         
         // ----------------------------------------
@@ -874,7 +876,7 @@
             csvContent += "=== TABELLINO PARTITA ===\r\n";
             
             // 1. Riga Header
-            let header = ["Numero", "Nome", "TGL (Total Game Load)", "Q1", "Q2", "Q3", "Q4"]; // AGGIUNTO TGL
+            let header = ["Numero", "Nome", "PMI (Carico Totale)", "Q1", "Q2", "Q3", "Q4"]; // AGGIORNATO PMI
             if (QUARTER_ORDER.includes(gameState.currentQuarter) && QUARTER_ORDER.indexOf(gameState.currentQuarter) >= QUARTER_ORDER.indexOf('OT')) {
                 header.push("OT/Extra");
             }
@@ -1028,7 +1030,8 @@
                 const isCourt = p.status === 'court';
                 const stats = calcGameStats(p); 
                 const restTime = calcRestStats(p);
-                const { tgl, currentStintDensity } = calcTotalGameLoad(p); // <-- NUOVO CALCOLO TGL & DENSITY
+                // AGGIORNATO: Recupero wallClockTimeMs per lo stint attivo
+                const { tgl, currentStintDensity, currentStintWallClockTimeMs } = calcTotalGameLoad(p); 
                 
                 // La soglia di warning potrebbe essere basata su TGL > 35 (Zona Rossa PDF) O Cons > 5 minuti.
                 const warnPMI = tgl > 35;
@@ -1050,7 +1053,7 @@
                 const densityValClass = isCourt ? 'text-yellow-400' : 'text-yellow-600 dark:text-yellow-400';
                 const consValClass = warnCons ? 'text-red-500 font-bold animate-pulse' : (isCourt ? 'text-white' : 'text-gray-500');
 
-                // CARD HTML: h-auto e min-h
+                // CARD HTML: Ristrutturazione per i 3 dati chiave
                 const html = `
                 <div id="${p.id}" class="player-card flex flex-col justify-between p-3 ${selCls} ${cardBg} ${border} min-h-[9rem] h-auto w-full"
                      draggable="true" ondragstart="handleDragStart(event, '${p.id}')" ondragend="handleDragEnd(event)"
@@ -1064,25 +1067,24 @@
                     
                     <div class="grid grid-cols-3 gap-2 mt-2 text-xs font-medium">
                         <div class="flex flex-col">
-                            <span class="uppercase text-[10px] ${statsLabel}">TGL (PMI)</span>
-                            <span class="font-mono text-sm font-bold ${tglValClass}">${tgl}</span>
+                            <span class="uppercase text-[10px] ${statsLabel}">PMI</span> <span class="font-mono text-sm font-bold ${tglValClass}">${tgl}</span>
                         </div>
                         <div class="flex flex-col">
-                            <span class="uppercase text-[10px] ${statsLabel}">${isCourt ? 'Densità' : 'Riposo'}</span>
-                            <span class="font-mono text-sm ${isCourt ? densityValClass : consValClass}">
-                                ${isCourt ? (currentStintDensity * 100).toFixed(0) + '%' : formatTime(restTime)}
+                            <span class="uppercase text-[10px] ${statsLabel}">${isCourt ? 'Densità' : 'Min Tot Gioco'}</span> 
+                            <span class="font-mono text-sm ${isCourt ? densityValClass : statsVal}">
+                                ${isCourt ? (currentStintDensity * 100).toFixed(0) + '%' : formatTime(stats.tot)} 
                             </span>
                         </div>
                         <div class="flex flex-col items-end">
-                            <span class="uppercase text-[10px] ${statsLabel}">Min ${isCourt ? 'Cons' : 'Tot'}</span>
-                            <span class="font-mono ${consValClass}">${isCourt ? formatTime(stats.currentCons) : formatTime(stats.tot)}</span>
+                            <span class="uppercase text-[10px] ${statsLabel}">${isCourt ? 'Wall Clock (minT)' : 'Riposo'}</span> <span class="font-mono ${consValClass}">${isCourt ? formatTime(currentStintWallClockTimeMs) : formatTime(restTime)}</span>
                         </div>
                     </div>
                 </div>`;
                 (isCourt?ca:ba).innerHTML += html;
             });
 
-            let tbl = '<table class="w-full text-sm text-left dark:text-gray-300"><thead class="bg-gray-50 dark:bg-gray-700/50 sticky top-0 z-10 backdrop-blur-sm text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wider"><tr><th class="px-4 py-3 font-medium">#</th><th class="px-4 py-3 font-medium">Nome</th><th class="px-4 py-3 font-medium text-right text-green-600 dark:text-green-400">TGL (PMI)</th><th class="px-4 py-3 font-medium text-right">Q1</th><th class="px-4 py-3 font-medium text-right">Q2</th><th class="px-4 py-3 font-medium text-right">Q3</th><th class="px-4 py-3 font-medium text-right">Q4</th>';
+            // Tabella Statistiche Totali (Header aggiornato)
+            let tbl = '<table class="w-full text-sm text-left dark:text-gray-300"><thead class="bg-gray-50 dark:bg-gray-700/50 sticky top-0 z-10 backdrop-blur-sm text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wider"><tr><th class="px-4 py-3 font-medium">#</th><th class="px-4 py-3 font-medium">Nome</th><th class="px-4 py-3 font-medium text-right text-green-600 dark:text-green-400">PMI (Carico Totale)</th><th class="px-4 py-3 font-medium text-right">Q1</th><th class="px-4 py-3 font-medium text-right">Q2</th><th class="px-4 py-3 font-medium text-right">Q3</th><th class="px-4 py-3 font-medium text-right">Q4</th>';
             if (QUARTER_ORDER.includes(gameState.currentQuarter) && QUARTER_ORDER.indexOf(gameState.currentQuarter) >= QUARTER_ORDER.indexOf('OT')) {
                 tbl += '<th class="px-4 py-3 font-medium text-right">OT</th>';
             }
