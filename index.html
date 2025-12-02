@@ -128,9 +128,18 @@
             <div class="bg-white dark:bg-gray-800 p-3 sm:p-4 rounded-2xl shadow-sm mb-4 flex flex-wrap sm:flex-nowrap justify-between items-center gap-4 border border-gray-200 dark:border-gray-700 flex-shrink-0">
                 <div class="flex-1 text-center sm:text-left order-1 sm:order-2 flex justify-center items-center gap-3">
                     <button onclick="adjustTime(30000)" class="w-10 h-10 rounded-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-700 dark:text-white font-bold shadow-sm transition active:scale-95 flex items-center justify-center text-xs">+30"</button>
-                    <div class="bg-gray-100 dark:bg-gray-900 px-6 py-2 rounded-xl border border-gray-200 dark:border-gray-700 inline-block min-w-[200px]">
-                        <span id="timer-display" class="timer-display tabular-nums">10:00</span>
+                    
+                    <div class="flex flex-col items-center">
+                        <div class="mb-1 text-center bg-gray-200 dark:bg-gray-700 px-3 py-1 rounded-lg border border-gray-300 dark:border-gray-600">
+                            <span class="text-xs font-semibold text-gray-600 dark:text-gray-300 mr-2">Wall Clock:</span>
+                            <span id="wall-clock-display" class="font-mono text-lg text-gray-800 dark:text-white tabular-nums">00:00</span>
+                        </div>
+                        
+                        <div class="bg-gray-100 dark:bg-gray-900 px-6 py-2 rounded-xl border border-gray-200 dark:border-gray-700 inline-block">
+                            <span id="timer-display" class="timer-display tabular-nums">10:00</span>
+                        </div>
                     </div>
+                    
                     <button onclick="adjustTime(-30000)" class="w-10 h-10 rounded-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-700 dark:text-white font-bold shadow-sm transition active:scale-95 flex items-center justify-center text-xs">-30"</button>
                 </div>
 
@@ -187,14 +196,26 @@
         const NEXT_QUARTER = { 'Q1': 'Q2', 'Q2': 'Q3', 'Q3': 'Q4', 'Q4': 'OT', 'OT': '2OT' };
         const DEFAULT_QUARTER = 'Q1';
         
-        // CHIAVE DI SALVATAGGIO MODIFICATA (v6 - Aggiunta Griglia Rotazioni per CSV)
-        const STORAGE_KEY = 'basket_rotation_local_v6'; 
+        // CHIAVE DI SALVATAGGIO MODIFICATA (v7 - Aggiunta Wall Clock)
+        const STORAGE_KEY = 'basket_rotation_local_v7'; 
 
         // Ristrutturato gameState per gestire i tempi di tutti i quarti
-        let gameState = { players: [], isRunning: false, lastUpdateTime: 0, currentQuarter: DEFAULT_QUARTER, quarterTimes: {} };
+        let gameState = { 
+            players: [], 
+            isRunning: false, 
+            lastUpdateTime: 0, 
+            currentQuarter: DEFAULT_QUARTER, 
+            quarterTimes: {},
+            // NUOVO: Tempo reale trascorso nel quarto (Wall Clock)
+            wallClockElapsedTimes: {} 
+        };
         let timerInterval = null;
         let selectedPlayerId = null;
 
+        // NUOVI PER WALL CLOCK
+        let wallClockInterval = null;
+        let wallClockLastUpdateTime = 0;
+        
         // --- HELPER FUNCTIONS ---
 
         function getRemainingTime() {
@@ -226,35 +247,48 @@
                     gameState = {
                         players: loaded.players || [],
                         isRunning: false, 
-                        // Ora carica quarterTimes o lo inizializza
                         quarterTimes: loaded.quarterTimes || {}, 
+                        // NUOVO: Carica il Wall Clock
+                        wallClockElapsedTimes: loaded.wallClockElapsedTimes || {},
                         lastUpdateTime: 0,
                         currentQuarter: loaded.currentQuarter || DEFAULT_QUARTER
                     };
                     
-                    // Se quarterTimes non è completo, lo riempiamo con i valori di default
                     if (Object.keys(gameState.quarterTimes).length === 0) {
                         QUARTER_ORDER.forEach(q => { gameState.quarterTimes[q] = QUARTER_DURATIONS_MS[q] || 0; });
                     }
+                    // NUOVO: Inizializza Wall Clock a 0 se mancante
+                    QUARTER_ORDER.forEach(q => { 
+                        if (gameState.wallClockElapsedTimes[q] === undefined) { 
+                            gameState.wallClockElapsedTimes[q] = 0; 
+                        } 
+                    });
                     
-                    if (gameState.players.length > 0) { showSetupOrGame(true); updateUI(); } 
+                    if (gameState.players.length > 0) { showSetupOrGame(true); startWallClock(); updateUI(); } 
                     else { showSetupOrGame(false); }
                 } catch(e) { console.error("Err loading", e); showSetupOrGame(false); }
-            } else { showSetupOrGame(false); }
+            } else { 
+                showSetupOrGame(false); 
+                // Inizializza Wall Clock al primo avvio
+                QUARTER_ORDER.forEach(q => { gameState.wallClockElapsedTimes[q] = 0; });
+            }
             
-            // Inizializza il campo avversario, se salvato in localStorage
             const savedOpponentName = localStorage.getItem('opponentName');
             if (savedOpponentName) {
                 document.getElementById('opponent-name').value = savedOpponentName;
             }
-            // Aggiungi listener per salvare il nome avversario al cambiamento
             document.getElementById('opponent-name').addEventListener('input', (e) => {
                 localStorage.setItem('opponentName', e.target.value.trim());
             });
         };
 
         function saveGameState() {
-            const dataToSave = { ...gameState, lastUpdateTime: gameState.isRunning ? Date.now() : gameState.lastUpdateTime };
+            const dataToSave = { 
+                ...gameState, 
+                // Salviamo il tempo corrente del Wall Clock, che viene aggiornato da updateWallClock
+                wallClockElapsedTimes: gameState.wallClockElapsedTimes,
+                lastUpdateTime: gameState.isRunning ? Date.now() : gameState.lastUpdateTime 
+            };
             localStorage.setItem(STORAGE_KEY, JSON.stringify(dataToSave));
         }
 
@@ -275,22 +309,70 @@
             });
             gameState.currentQuarter = DEFAULT_QUARTER; 
             
-            // NUOVA INIZIALIZZAZIONE TEMPI: tutti i quarti partono dalla loro durata massima
             gameState.quarterTimes = {};
-            QUARTER_ORDER.forEach(q => { gameState.quarterTimes[q] = QUARTER_DURATIONS_MS[q] || 0; });
+            gameState.wallClockElapsedTimes = {}; // NUOVO: reset Wall Clock
+            QUARTER_ORDER.forEach(q => { 
+                gameState.quarterTimes[q] = QUARTER_DURATIONS_MS[q] || 0; 
+                gameState.wallClockElapsedTimes[q] = 0; // NUOVO: Inizializzazione
+            });
 
             gameState.isRunning = false; gameState.lastUpdateTime = 0;
             gameState.players.filter(p => p.status === 'court').forEach(p => p.performance = [{ quarter: DEFAULT_QUARTER, rotations: [{ start: 0, end: null }] }]);
-            saveGameState(); showSetupOrGame(true); updateUI();
+            saveGameState(); 
+            showSetupOrGame(true); 
+            startWallClock(); // NUOVO: Avvia il Wall Clock all'inizio
+            updateUI();
         }
 
+        // --- WALL CLOCK LOGIC (NUOVO) ---
+
+        function startWallClock() {
+            if (wallClockInterval) return;
+            wallClockLastUpdateTime = Date.now();
+            wallClockInterval = setInterval(updateWallClock, 500); // Aggiorna ogni 500ms
+        }
+
+        function updateWallClock() {
+            const remainingTime = getRemainingTime();
+            
+            // Il Wall Clock si ferma SOLO quando il timer di gioco arriva a 0:00
+            if (remainingTime <= 0) {
+                if (wallClockInterval) {
+                    clearInterval(wallClockInterval);
+                    wallClockInterval = null;
+                    saveGameState();
+                }
+                updateUI();
+                return;
+            }
+
+            const now = Date.now();
+            const diff = now - wallClockLastUpdateTime;
+            wallClockLastUpdateTime = now;
+
+            const currentQ = gameState.currentQuarter;
+            // Aggiorna il tempo trascorso (Wall Clock) per il quarto corrente
+            gameState.wallClockElapsedTimes[currentQ] = (gameState.wallClockElapsedTimes[currentQ] || 0) + diff;
+            
+            // Salva lo stato del Wall Clock occasionalmente per non sovraccaricare localStorage
+            if (Math.random() < 0.2) saveGameState();
+            
+            // Aggiorna solo il display del Wall Clock per performance (il resto è in updateUI)
+            document.getElementById('wall-clock-display').textContent = formatTime(gameState.wallClockElapsedTimes[currentQ]);
+        }
+        
         // --- TIMER AND QUARTER LOGIC ---
 
         function toggleTimer() {
             if (getRemainingTime() <= 0) { showMessage("Fine quarto."); gameState.isRunning = false; saveGameState(); updateUI(); return; }
             gameState.isRunning = !gameState.isRunning;
-            if (gameState.isRunning) { gameState.lastUpdateTime = Date.now(); timerInterval = setInterval(updateTimer, 100); } 
-            else { clearInterval(timerInterval); }
+            if (gameState.isRunning) { 
+                gameState.lastUpdateTime = Date.now(); 
+                timerInterval = setInterval(updateTimer, 100); 
+            } 
+            else { 
+                clearInterval(timerInterval); 
+            }
             saveGameState(); updateUI();
         }
 
@@ -303,7 +385,7 @@
 
             if (newTime <= 0) { 
                 setRemainingTime(0); 
-                handleQuarterEnd(true); // Indica che il quarto è finito per esaurimento del tempo
+                handleQuarterEnd(true); 
             } else {
                 setRemainingTime(newTime);
             }
@@ -313,30 +395,30 @@
         function handleQuarterEnd(isTimeOut = false) {
             clearInterval(timerInterval); gameState.isRunning = false;
             
-            // 1. Finalizza le rotazioni per il quarto che sta finendo
+            // NUOVO: Ferma il Wall Clock (chiamato anche da updateWallClock, ma meglio essere sicuri)
+            if (wallClockInterval) { 
+                clearInterval(wallClockInterval);
+                wallClockInterval = null;
+            }
+
             const quarterDuration = getQuarterDuration();
             const elapsed = quarterDuration - getRemainingTime();
             updateRotationEndTimes(elapsed);
 
-            // 2. Imposta a 0:00 se il quarto è effettivamente finito
-            if(isTimeOut) {
-                setRemainingTime(0);
-            }
+            if(isTimeOut) { setRemainingTime(0); }
 
             const nextQ = NEXT_QUARTER[gameState.currentQuarter];
             if (nextQ) {
-                // Se si è arrivati a 0:00, si avanza al quarto successivo
                 if(isTimeOut) {
                     gameState.currentQuarter = nextQ; 
                     
-                    // Inizia la rotazione per i giocatori in campo nel nuovo quarto (start time è 0)
                     gameState.players.filter(p => p.status === 'court').forEach(p => {
                         let perf = getPerf(p, nextQ); 
                         perf.rotations.push({ start: 0, end: null });
                     });
                     showMessage(`Fine Quarto! Passaggio a ${nextQ}.`);
+                    startWallClock(); // NUOVO: riavvia Wall Clock
                 } else {
-                    // Se non è finito (e.g. cambio quarto manuale)
                     showMessage(`Tempo salvato: ${formatTime(getRemainingTime())}.`);
                 }
             } else { 
@@ -360,57 +442,53 @@
             const newQ = document.getElementById('quarter-select').value;
             if (newQ === gameState.currentQuarter) return;
 
-            // 1. Interrompi il timer e salva il tempo del quarto precedente
             if (gameState.isRunning) { gameState.isRunning = false; clearInterval(timerInterval); }
+            
+            // NUOVO: Ferma il Wall Clock durante il cambio quarto
+            if (wallClockInterval) { 
+                clearInterval(wallClockInterval);
+                wallClockInterval = null;
+            }
             
             const oldQ = gameState.currentQuarter;
             const durationOld = getQuarterDuration(oldQ);
             const remainingOld = gameState.quarterTimes[oldQ] || 0;
             const elapsedOld = durationOld - remainingOld;
             
-            // 2. Aggiorna i tempi di uscita/entrata nel quarto precedente
             updateRotationEndTimes(elapsedOld);
             
-            // 3. Imposta il nuovo quarto
             gameState.currentQuarter = newQ; 
             
-            // 4. Aggiorna le rotazioni nel nuovo quarto
             const durationNew = getQuarterDuration(newQ);
             const remainingNew = gameState.quarterTimes[newQ] || durationNew;
             const elapsedNew = durationNew - remainingNew;
 
-            // *** FIX CRITICO: Gestione del Quarto Destinazione ***
             if (remainingNew > 0) {
-                // Il quarto non è finito, apri la rotazione se il giocatore è in campo.
                 gameState.players.filter(p=>p.status==='court').forEach(p => {
                     const perf = getPerf(p, newQ);
-                    // Apre una rotazione se non ce n'è una aperta (end === null)
                     if(!perf.rotations.length || perf.rotations.at(-1).end !== null) {
                         perf.rotations.push({start:elapsedNew, end:null});
                     }
                 });
             } else {
-                 // Il quarto è FINITO (remainingNew === 0). Chiudi forzatamente qualsiasi rotazione aperta
-                 // in questo quarto. Questo congela i minuti a 10:00 (o 5:00 per OT) e previene i ricalcoli errati.
-                 gameState.players.forEach(p => { // Controlla TUTTI i giocatori
+                 gameState.players.forEach(p => { 
                     const perf = getPerf(p, newQ);
                     if(perf.rotations.length && perf.rotations.at(-1).end === null) {
-                        // Chiudi al tempo massimo trascorso (elapsedNew è la durata completa, es. 600000ms)
                         perf.rotations.at(-1).end = durationNew; 
                     }
                  });
             }
 
+            startWallClock(); // NUOVO: Riavvia il Wall Clock
             saveGameState(); updateUI();
         }
 
 
-        // --- STATS AND ROTATION TRACKING ---
+        // --- STATS AND ROTATION TRACKING (Non Modificate) ---
 
         function updateRotationEndTimes(elapsed) {
             gameState.players.filter(p => p.status === 'court').forEach(p => {
                 const perf = getPerf(p, gameState.currentQuarter);
-                // Chiudi solo se è effettivamente aperta
                 if(perf.rotations.length && perf.rotations.at(-1).end === null) perf.rotations.at(-1).end = elapsed;
             });
         }
@@ -422,9 +500,7 @@
         }
 
         function handleSubstitution(p, oldS, newS) {
-            // *** MANTENUTO: Blocca qualsiasi modifica alle rotazioni se il quarto è finito. ***
             if (getRemainingTime() <= 0) {
-                // Il cambio è solo visivo, le statistiche del quarto finito sono invariate.
                 return;
             }
 
@@ -443,8 +519,6 @@
         function calcQuarterStats(p, qCode) {
             let tot = 0;
             const qDuration = getQuarterDuration(qCode);
-            
-            // Tempo trascorso nel quarto in questione
             let remaining = gameState.quarterTimes[qCode] || 0;
             let elapsed = qDuration - remaining;
 
@@ -453,17 +527,12 @@
 
             perf.rotations.forEach(r => {
                 let end = r.end;
-                // Se la rotazione è aperta
                 if (end === null) { 
-                    // Se è il quarto corrente E il giocatore è in campo, usa il tempo trascorso
                     if (qCode === gameState.currentQuarter && p.status === 'court') {
                         end = elapsed; 
                     } else if (remaining === 0) {
-                        // Rotazione aperta in un quarto che ha 0:00 
-                        // Per sicurezza, se è aperta e il quarto è FINITO, il tempo giocato è 0 (start=end)
                         end = r.start; 
                     } else {
-                        // Rotazione aperta in un quarto non corrente ma non finito (salto manuale)
                         end = elapsed; 
                     }
                 }
@@ -493,12 +562,9 @@
                     } else if (r.end !== null) {
                         end = r.end;
                     } else {
-                        // Rotazione aperta in un quarto non corrente
                         if (perf.quarter !== gameState.currentQuarter && quarterRemaining === 0) {
-                            // Rotazione aperta in un quarto passato e FINITO. Preveniamo l'aggiunta di tempo fantasma.
                             end = r.start;
                         } else {
-                            // Rotazione aperta in un quarto non corrente ma NON FINITO (e.g. salto manuale)
                             end = quarterElapsed; 
                         }
                     }
@@ -507,7 +573,6 @@
                 });
             });
 
-            // Calcolo del tempo consecutivo
             if(p.status === 'court' && currentQRemaining > 0) {
                 const perf = getPerf(p, gameState.currentQuarter);
                 if(perf.rotations.length && perf.rotations.at(-1).end === null) currentCons = currentQElapsed - perf.rotations.at(-1).start;
@@ -527,81 +592,67 @@
                 if (p.rotations.length > 0) {
                     const lastRot = p.rotations[p.rotations.length - 1];
                     if (lastRot.end !== null) { lastExitAbsTime = getQuarterOffset(p.q) + lastRot.end; break; }
-                    // Se la rotazione è aperta, ma il quarto è finito (tempo restante 0), consideriamo l'uscita come la fine del quarto.
                     if (gameState.quarterTimes[p.q] === 0) { lastExitAbsTime = getQuarterOffset(p.q) + getQuarterDuration(p.q); break; }
                 }
             }
             return Math.max(0, absCurrentTime - lastExitAbsTime);
         }
         
-        // --- NUOVA FUNZIONE PER LA GRIGLIA ROTAZIONI (CSV) ---
+        // --- CSV EXPORT LOGIC (Non Modificate) ---
         
         function getSimplifiedStintGrid(player) {
             const gridData = [];
             let currentOffset = 0;
             
-            // Determina il numero massimo di colonne (quarti giocati/definiti)
             let maxQuarterIndex = QUARTER_ORDER.indexOf('Q4');
             if (QUARTER_ORDER.includes(gameState.currentQuarter) && QUARTER_ORDER.indexOf(gameState.currentQuarter) > maxQuarterIndex) {
                 maxQuarterIndex = QUARTER_ORDER.indexOf(gameState.currentQuarter);
             }
             
-            // Loop su tutti i quarti fino al corrente (o 2OT)
             for (let i = 0; i <= maxQuarterIndex; i++) {
                 const qCode = QUARTER_ORDER[i];
-                const qDuration = getQuarterDuration(qCode); // Durata del quarto in MS (es. 600000ms)
+                const qDuration = getQuarterDuration(qCode); 
                 
-                if (qDuration === 0) continue; // Salta quarti non standardizzati
+                if (qDuration === 0) continue;
                 
                 let quarterRemaining = gameState.quarterTimes[qCode] || qDuration;
                 let quarterElapsed = qDuration - quarterRemaining;
 
                 const perf = player.performance.find(x => x.quarter === qCode);
                 
-                // Variabile che tiene traccia del tempo che è necessario "saltare" (tempo di riposo)
                 let lastEnd = 0; 
 
-                // Aggiungiamo i tempi di riposo/gioco in questo quarto
                 if (perf) {
-                    // Ordina le rotazioni per tempo di inizio
                     const sortedRotations = [...perf.rotations].sort((a, b) => a.start - b.start);
                     
                     sortedRotations.forEach(r => {
                         let startMs = r.start;
                         let endMs = r.end;
                         
-                        // Gestione della rotazione aperta (stint ancora in corso)
                         if (endMs === null) {
                             if (qCode === gameState.currentQuarter && player.status === 'court') {
                                 endMs = quarterElapsed;
                             } else if (qCode !== gameState.currentQuarter && quarterRemaining === 0) {
-                                // Quarto non corrente ma FINITO (tempo max giocato)
                                 endMs = qDuration;
                             } else {
-                                // Quarto non corrente ma NON FINITO (tempo trascorso)
                                 endMs = quarterElapsed; 
                             }
                         }
 
-                        // 1. Durata del RIposo (Gap) prima dello stint corrente
-                        // Se c'è un gap tra la fine dello stint precedente (lastEnd) e l'inizio di questo (startMs)
                         const restDuration = startMs - lastEnd;
                         if (restDuration > 0) {
-                            gridData.push(restDuration / 60000); // Durata riposo in minuti
-                            gridData.push(0); // Flag/Durata del GIOCATO (0)
+                            gridData.push(restDuration / 60000); 
+                            gridData.push(0); 
                         } else if (restDuration < 0) {
-                             // Caso di sovrapposizione o errore logico, aggiunge un "riposo" di 0
                              gridData.push(0); 
                              gridData.push(0);
                         }
 
-                        // 2. Durata del Gioco (Stint)
                         const playDuration = endMs - startMs;
                         if (playDuration > 0) {
-                             gridData.push(0); // Flag/Durata del RIPOSO (0)
-                             gridData.push(playDuration / 60000); // Durata gioco in minuti
+                             gridData.push(0); 
+                             gridData.push(playDuration / 60000); 
                         } else {
-                            // Stint nullo o punto di errore, aggiunge 0 per entrambi
                             gridData.push(0); 
                             gridData.push(0);
                         }
@@ -610,34 +661,26 @@
                     });
                 }
                 
-                // 3. Durata del RIposo (Gap) dalla fine dell'ultimo stint alla fine del quarto (o al tempo trascorso)
                 let quarterEndBoundary = quarterElapsed;
-                // Se il quarto è FINITO, il confine è la durata intera
                 if(quarterRemaining === 0) quarterEndBoundary = qDuration;
 
                 const finalRestDuration = quarterEndBoundary - lastEnd;
                 if (finalRestDuration > 0) {
-                    gridData.push(finalRestDuration / 60000); // Durata riposo in minuti
-                    gridData.push(0); // Flag/Durata del GIOCATO (0)
+                    gridData.push(finalRestDuration / 60000); 
+                    gridData.push(0); 
                 }
 
-                // Se il quarto non è finito, la griglia si ferma qui.
                 if (qCode === gameState.currentQuarter && quarterRemaining > 0) {
-                    // La griglia si ferma al tempo attuale, gli spazi vuoti non devono essere riempiti.
                 } else if (qDuration / 60000 > 0 && finalRestDuration + lastEnd < qDuration) {
-                    // Riempimento del resto del quarto se non è corrente e non è stato giocato tutto
                     const paddingTime = qDuration - (finalRestDuration + lastEnd);
                     if (paddingTime > 0) {
-                        gridData.push(paddingTime / 60000); // Durata riposo in minuti
-                        gridData.push(0); // Flag/Durata del GIOCATO (0)
+                        gridData.push(paddingTime / 60000); 
+                        gridData.push(0); 
                     }
                 }
             }
             
-            // La griglia è [Riposo1, Gioco1, Riposo2, Gioco2, ...] in minuti.
-            // I valori di "Gioco" e "Riposo" sono alternati per permettere il grafico a barre sovrapposte.
-            // Gioco = linea colorata, Riposo = linea trasparente (usando lo sfondo)
-            return gridData.filter((_, index) => index % 2 === 0); // Vogliamo solo i valori di Gioco
+            return gridData.filter((_, index) => index % 2 === 0);
         }
         
         function getStintGridHeaders() {
@@ -653,26 +696,23 @@
                 const qDurationMinutes = getQuarterDuration(qCode) / 60000;
                 
                 if (qDurationMinutes > 0) {
-                    // Suddividi il quarto in minuti per l'intestazione
                     for(let m = 1; m <= qDurationMinutes; m++) {
                         totalMinutes++;
-                        // L'intestazione sarà 'Q1:M1', 'Q1:M2', ..., 'Q2:M1'
                         headers.push(`${qCode}:${m}`); 
                     }
                 }
             }
             
-            // Genera le intestazioni per i dati (alternati: Riposo, Gioco)
             const dataHeaders = [];
             headers.forEach(h => {
-                dataHeaders.push(`Resto (${h})`); // Colonna per lo sfondo/riposo
-                dataHeaders.push(`Gioco (${h})`); // Colonna per la linea colorata
+                dataHeaders.push(`Resto (${h})`); 
+                dataHeaders.push(`Gioco (${h})`); 
             });
             
             return dataHeaders;
         }
 
-        // --- DRAG/DROP AND UI ---
+        // --- DRAG/DROP AND UI (Non Modificate, solo updateUI) ---
 
         function allowDrop(ev) { ev.preventDefault(); }
         function handleDragStart(ev, id) { ev.dataTransfer.setData("pid", id); ev.target.classList.add('is-dragging'); }
@@ -693,7 +733,6 @@
         function processDrop(pid, newStatus) {
             const p = gameState.players.find(x => x.id === pid);
             if (!p || p.status === newStatus) return;
-            // Solo se il quarto NON è finito, si applica il limite di 5 in campo
             if (getRemainingTime() > 0 && newStatus === 'court' && gameState.players.filter(x => x.status === 'court').length >= 5) return showMessage("Massimo 5 in campo!");
             
             const oldStatus = p.status;
@@ -710,26 +749,18 @@
                 const bench = p1.status === 'bench' ? p1 : p2;
                 const court = p1.status === 'bench' ? p2 : p1;
                 
-                // Pre-check limite
                 if (getRemainingTime() > 0 && gameState.players.filter(x => x.status === 'court').length > 5) {
-                     // Questo caso non dovrebbe succedere con due giocatori con status diversi
                 }
 
-                // Eseguire lo swap
                 bench.status = 'court'; 
                 court.status = 'bench';
                 
-                // Aggiornare le rotazioni
                 handleSubstitution(court, 'court', 'bench'); 
                 handleSubstitution(bench, 'bench', 'court');
                 
                 saveGameState(); updateUI();
             } else { showMessage("Scambio valido solo Campo <-> Panchina."); selectedPlayerId = null; updateUI(); }
         }
-
-        // FUNZIONE toggleTheme RIMOSSA (dark mode fissa)
-
-        // --- EXPORT CSV AGGIORNATO ---
 
         function exportToCSV() {
             const data = gameState.players;
@@ -743,7 +774,6 @@
             // --- SEZIONE 1: TABELLINO CLASSICO ---
             csvContent += "=== TABELLINO PARTITA ===\r\n";
             
-            // 1. Riga Header
             let header = ["Numero", "Nome", "Q1", "Q2", "Q3", "Q4"];
             if (QUARTER_ORDER.includes(gameState.currentQuarter) && QUARTER_ORDER.indexOf(gameState.currentQuarter) >= QUARTER_ORDER.indexOf('OT')) {
                 header.push("OT/Extra");
@@ -751,7 +781,6 @@
             header.push("TOTALE Partita", "Stint Dettagliati (Q:Start-End)");
             csvContent += header.join(separator) + "\r\n";
 
-            // 2. Righe Dati
             sortedPlayers.forEach(p => {
                 const gameStats = calcGameStats(p); 
                 const q1 = formatTime(calcQuarterStats(p, 'Q1'));
@@ -760,11 +789,8 @@
                 const q4 = formatTime(calcQuarterStats(p, 'Q4'));
                 const total = formatTime(gameStats.tot);
                 
-                // *** AGGIUNTA DETTAGLI STINT (Riformattato per essere più semplice in Excel) ***
-                // Questo è l'elenco semplice dei periodi di gioco
                 const detailedStints = getDetailedStints(p); 
                 
-                // Racchiudo il nome e i dettagli tra virgolette per gestire i separatori
                 let row = [p.number, `"${p.name}"`, q1, q2, q3, q4]; 
 
                 if (QUARTER_ORDER.includes(gameState.currentQuarter) && QUARTER_ORDER.indexOf(gameState.currentQuarter) >= QUARTER_ORDER.indexOf('OT')) {
@@ -772,7 +798,7 @@
                     row.push(ot);
                 }
                 
-                row.push(total, `"${detailedStints.replace(/"/g, '""')}"`); // Sostituisce virgolette interne
+                row.push(total, `"${detailedStints.replace(/"/g, '""')}"`);
                 csvContent += row.join(separator) + "\r\n";
             });
             csvContent += "\r\n";
@@ -781,19 +807,16 @@
             csvContent += "=== GRIGLIA ROTAZIONI (minuti) PER GRAFICO TIMELINE ===\r\n";
             csvContent += "I dati sono alternati: 'Riposo (minuti) | Gioco (minuti) | Riposo | Gioco | ...'\r\n";
             
-            // Intestazioni per la griglia rotazioni (alternanza Riposo/Gioco per ogni minuto giocato)
             const gridHeaders = ["Numero", "Nome", ...getStintGridHeaders()];
             csvContent += gridHeaders.join(separator) + "\r\n";
 
             sortedPlayers.forEach(p => {
-                // I dati sono in minuti (es. 1.0 = 1 minuto, 0.5 = 30 secondi)
                 const gridData = getSimplifiedStintGrid(p); 
                 let row = [p.number, `"${p.name}"`, ...gridData];
                 csvContent += row.join(separator) + "\r\n";
             });
             csvContent += "\r\n";
 
-            // 3. Trigger Download
             const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
             const link = document.createElement("a");
             if (link.download !== undefined) { 
@@ -811,7 +834,6 @@
             }
         }
         
-        // La funzione getDetailedStints è stata mantenuta dall'iterazione precedente (non strettamente necessaria ma utile)
         function getDetailedStints(player) {
             const currentQuarter = gameState.currentQuarter;
             const currentQDuration = getQuarterDuration();
@@ -853,7 +875,7 @@
             return details.join(' | ');
         }
         
-        // --- UI RENDER ---
+        // --- UI RENDER (AGGIORNATA) ---
         
         function updateUI() {
             if (!gameState.players.length) return;
@@ -861,10 +883,16 @@
             btn.textContent = gameState.isRunning ? 'Pausa' : 'Avvia';
             btn.className = gameState.isRunning ? "flex-1 sm:flex-none bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-3 px-6 rounded-xl shadow-md active:transform active:scale-95 transition w-28" : "flex-1 sm:flex-none bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-xl shadow-md active:transform active:scale-95 transition w-28";
             
+            const remainingTime = getRemainingTime();
             const td = document.getElementById('timer-display');
-            td.textContent = formatTime(getRemainingTime());
-            td.className = `timer-display ${getRemainingTime()===0?'text-red-600':''} tabular-nums`;
+            td.textContent = formatTime(remainingTime);
+            td.className = `timer-display ${remainingTime===0?'text-red-600':''} tabular-nums`;
             document.getElementById('quarter-select').value = gameState.currentQuarter;
+
+            // NUOVO: Aggiorna il Wall Clock
+            const currentWallClockTime = gameState.wallClockElapsedTimes[gameState.currentQuarter] || 0;
+            document.getElementById('wall-clock-display').textContent = formatTime(currentWallClockTime);
+
 
             const ca = document.getElementById('court-area'), ba = document.getElementById('bench-area'), sa = document.getElementById('total-stats-area');
             ca.innerHTML=''; ba.innerHTML=''; sa.innerHTML='';
@@ -887,7 +915,6 @@
                 const statsVal = isCourt ? 'court-text-primary' : 'text-gray-600 dark:text-gray-300';
                 const warnClass = warn ? 'text-red-500 font-bold animate-pulse' : (isCourt ? 'text-white' : 'text-gray-500');
 
-                // CARD HTML: h-auto e min-h
                 const html = `
                 <div id="${p.id}" class="player-card flex flex-col justify-between p-3 ${selCls} ${cardBg} ${border} min-h-[9rem] h-auto w-full"
                      draggable="true" ondragstart="handleDragStart(event, '${p.id}')" ondragend="handleDragEnd(event)"
