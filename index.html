@@ -100,6 +100,10 @@
                 <button onclick="exportToCSV()" class="p-2 rounded-full bg-blue-600 dark:bg-blue-700 text-white shadow-sm hover:shadow-md transition active:scale-95 text-xs font-bold uppercase" title="Esporta Statistiche in CSV">
                     CSV
                 </button>
+                <button id="theme-toggle" onclick="toggleTheme()" class="p-2 rounded-full bg-white dark:bg-gray-800 text-gray-800 dark:text-yellow-400 shadow-sm hover:shadow-md transition">
+                    <svg id="sun-icon" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
+                    <svg id="moon-icon" class="h-6 w-6 hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path></svg>
+                </button>
             </div>
         </header>
         
@@ -126,21 +130,22 @@
         <div id="game-container" class="flex-1 flex flex-col min-h-0 pb-4 hidden">
             
             <div class="bg-white dark:bg-gray-800 p-3 sm:p-4 rounded-2xl shadow-sm mb-4 flex flex-wrap sm:flex-nowrap justify-between items-center gap-4 border border-gray-200 dark:border-gray-700 flex-shrink-0">
-                <div class="flex-1 text-center sm:text-left order-1 sm:order-2 flex justify-center items-center gap-3">
-                    <button onclick="adjustTime(30000)" class="w-10 h-10 rounded-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-700 dark:text-white font-bold shadow-sm transition active:scale-95 flex items-center justify-center text-xs">+30"</button>
-                    
+                
+                <div class="flex flex-col sm:flex-row flex-1 text-center sm:text-left order-1 sm:order-2 justify-center items-center gap-3">
                     <div class="flex flex-col items-center">
-                        <div class="mb-1 text-center bg-gray-200 dark:bg-gray-700 px-3 py-1 rounded-lg border border-gray-300 dark:border-gray-600">
-                            <span class="text-xs font-semibold text-gray-600 dark:text-gray-300 mr-2">Wall Clock:</span>
-                            <span id="wall-clock-display" class="font-mono text-lg text-gray-800 dark:text-white tabular-nums">00:00</span>
-                        </div>
-                        
-                        <div class="bg-gray-100 dark:bg-gray-900 px-6 py-2 rounded-xl border border-gray-200 dark:border-gray-700 inline-block">
-                            <span id="timer-display" class="timer-display tabular-nums">10:00</span>
+                        <span class="text-xs font-semibold text-gray-500 dark:text-gray-400">Tempo Totale</span>
+                        <div class="bg-gray-100 dark:bg-gray-900 px-4 py-1 rounded-lg border border-gray-200 dark:border-gray-700 inline-block">
+                            <span id="wall-clock-display" class="font-mono text-xl text-blue-600 dark:text-blue-400 tabular-nums">00:00</span>
                         </div>
                     </div>
                     
-                    <button onclick="adjustTime(-30000)" class="w-10 h-10 rounded-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-700 dark:text-white font-bold shadow-sm transition active:scale-95 flex items-center justify-center text-xs">-30"</button>
+                    <div class="flex items-center gap-2 mt-2 sm:mt-0">
+                        <button onclick="adjustTime(30000)" class="w-10 h-10 rounded-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-700 dark:text-white font-bold shadow-sm transition active:scale-95 flex items-center justify-center text-xs" title="Aggiungi 30 secondi">+30"</button>
+                        <div class="bg-gray-100 dark:bg-gray-900 px-6 py-2 rounded-xl border border-gray-200 dark:border-gray-700 inline-block min-w-[200px]">
+                            <span id="timer-display" class="timer-display tabular-nums">10:00</span>
+                        </div>
+                        <button onclick="adjustTime(-30000)" class="w-10 h-10 rounded-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-700 dark:text-white font-bold shadow-sm transition active:scale-95 flex items-center justify-center text-xs" title="Rimuovi 30 secondi">-30"</button>
+                    </div>
                 </div>
 
                 <div class="w-full sm:w-auto order-2 sm:order-3">
@@ -196,8 +201,8 @@
         const NEXT_QUARTER = { 'Q1': 'Q2', 'Q2': 'Q3', 'Q3': 'Q4', 'Q4': 'OT', 'OT': '2OT' };
         const DEFAULT_QUARTER = 'Q1';
         
-        // CHIAVE DI SALVATAGGIO MODIFICATA (v7 - Aggiunta Wall Clock)
-        const STORAGE_KEY = 'basket_rotation_local_v7'; 
+        // CHIAVE DI SALVATAGGIO MODIFICATA (v8 - Wall Clock Continua durante le pause)
+        const STORAGE_KEY = 'basket_rotation_local_v8'; 
 
         // Ristrutturato gameState per gestire i tempi di tutti i quarti
         let gameState = { 
@@ -206,16 +211,14 @@
             lastUpdateTime: 0, 
             currentQuarter: DEFAULT_QUARTER, 
             quarterTimes: {},
-            // NUOVO: Tempo reale trascorso nel quarto (Wall Clock)
-            wallClockElapsedTimes: {} 
+            // Variabile per il Wall Clock (Tempo Totale di Gioco Reale)
+            totalWallTimePlayed: 0,
+            // NUOVO: Timestamp assoluto del primo avvio (usato per il Wall Clock continuo)
+            absoluteWallClockStart: 0
         };
         let timerInterval = null;
         let selectedPlayerId = null;
 
-        // NUOVI PER WALL CLOCK
-        let wallClockInterval = null;
-        let wallClockLastUpdateTime = 0;
-        
         // --- HELPER FUNCTIONS ---
 
         function getRemainingTime() {
@@ -248,30 +251,31 @@
                         players: loaded.players || [],
                         isRunning: false, 
                         quarterTimes: loaded.quarterTimes || {}, 
-                        // NUOVO: Carica il Wall Clock
-                        wallClockElapsedTimes: loaded.wallClockElapsedTimes || {},
                         lastUpdateTime: 0,
-                        currentQuarter: loaded.currentQuarter || DEFAULT_QUARTER
+                        currentQuarter: loaded.currentQuarter || DEFAULT_QUARTER,
+                        totalWallTimePlayed: loaded.totalWallTimePlayed || 0,
+                        // NUOVO: Carica lo stato del Wall Clock
+                        absoluteWallClockStart: loaded.absoluteWallClockStart || 0 
                     };
                     
                     if (Object.keys(gameState.quarterTimes).length === 0) {
                         QUARTER_ORDER.forEach(q => { gameState.quarterTimes[q] = QUARTER_DURATIONS_MS[q] || 0; });
                     }
-                    // NUOVO: Inizializza Wall Clock a 0 se mancante
-                    QUARTER_ORDER.forEach(q => { 
-                        if (gameState.wallClockElapsedTimes[q] === undefined) { 
-                            gameState.wallClockElapsedTimes[q] = 0; 
-                        } 
-                    });
                     
-                    if (gameState.players.length > 0) { showSetupOrGame(true); startWallClock(); updateUI(); } 
+                    if (gameState.players.length > 0) { showSetupOrGame(true); updateUI(); } 
                     else { showSetupOrGame(false); }
+                    
+                    // Se il timer era in esecuzione, lo riavviamo con la logica corretta
+                    if (loaded.isRunning) {
+                        gameState.isRunning = true;
+                        gameState.lastUpdateTime = loaded.lastUpdateTime;
+                        // Riavvia il timer (manterrà lo stato di isRunning=true se era in esecuzione)
+                        toggleTimer(); 
+                    }
+                    
                 } catch(e) { console.error("Err loading", e); showSetupOrGame(false); }
-            } else { 
-                showSetupOrGame(false); 
-                // Inizializza Wall Clock al primo avvio
-                QUARTER_ORDER.forEach(q => { gameState.wallClockElapsedTimes[q] = 0; });
-            }
+            } else { showSetupOrGame(false); }
+            if(localStorage.getItem('theme')==='dark') toggleTheme(false); 
             
             const savedOpponentName = localStorage.getItem('opponentName');
             if (savedOpponentName) {
@@ -285,8 +289,7 @@
         function saveGameState() {
             const dataToSave = { 
                 ...gameState, 
-                // Salviamo il tempo corrente del Wall Clock, che viene aggiornato da updateWallClock
-                wallClockElapsedTimes: gameState.wallClockElapsedTimes,
+                // Aggiorniamo lastUpdateTime solo se era in esecuzione
                 lastUpdateTime: gameState.isRunning ? Date.now() : gameState.lastUpdateTime 
             };
             localStorage.setItem(STORAGE_KEY, JSON.stringify(dataToSave));
@@ -310,106 +313,131 @@
             gameState.currentQuarter = DEFAULT_QUARTER; 
             
             gameState.quarterTimes = {};
-            gameState.wallClockElapsedTimes = {}; // NUOVO: reset Wall Clock
-            QUARTER_ORDER.forEach(q => { 
-                gameState.quarterTimes[q] = QUARTER_DURATIONS_MS[q] || 0; 
-                gameState.wallClockElapsedTimes[q] = 0; // NUOVO: Inizializzazione
-            });
+            QUARTER_ORDER.forEach(q => { gameState.quarterTimes[q] = QUARTER_DURATIONS_MS[q] || 0; });
+
+            // NUOVO: Reset completo del Wall Clock
+            gameState.totalWallTimePlayed = 0;
+            gameState.absoluteWallClockStart = 0;
 
             gameState.isRunning = false; gameState.lastUpdateTime = 0;
             gameState.players.filter(p => p.status === 'court').forEach(p => p.performance = [{ quarter: DEFAULT_QUARTER, rotations: [{ start: 0, end: null }] }]);
-            saveGameState(); 
-            showSetupOrGame(true); 
-            startWallClock(); // NUOVO: Avvia il Wall Clock all'inizio
-            updateUI();
+            saveGameState(); showSetupOrGame(true); updateUI();
         }
 
-        // --- WALL CLOCK LOGIC (NUOVO) ---
-
-        function startWallClock() {
-            if (wallClockInterval) return;
-            wallClockLastUpdateTime = Date.now();
-            wallClockInterval = setInterval(updateWallClock, 500); // Aggiorna ogni 500ms
-        }
-
-        function updateWallClock() {
-            const remainingTime = getRemainingTime();
-            
-            // Il Wall Clock si ferma SOLO quando il timer di gioco arriva a 0:00
-            if (remainingTime <= 0) {
-                if (wallClockInterval) {
-                    clearInterval(wallClockInterval);
-                    wallClockInterval = null;
-                    saveGameState();
-                }
-                updateUI();
-                return;
-            }
-
-            const now = Date.now();
-            const diff = now - wallClockLastUpdateTime;
-            wallClockLastUpdateTime = now;
-
-            const currentQ = gameState.currentQuarter;
-            // Aggiorna il tempo trascorso (Wall Clock) per il quarto corrente
-            gameState.wallClockElapsedTimes[currentQ] = (gameState.wallClockElapsedTimes[currentQ] || 0) + diff;
-            
-            // Salva lo stato del Wall Clock occasionalmente per non sovraccaricare localStorage
-            if (Math.random() < 0.2) saveGameState();
-            
-            // Aggiorna solo il display del Wall Clock per performance (il resto è in updateUI)
-            document.getElementById('wall-clock-display').textContent = formatTime(gameState.wallClockElapsedTimes[currentQ]);
-        }
-        
         // --- TIMER AND QUARTER LOGIC ---
 
         function toggleTimer() {
             if (getRemainingTime() <= 0) { showMessage("Fine quarto."); gameState.isRunning = false; saveGameState(); updateUI(); return; }
+            
+            const wasRunning = gameState.isRunning;
             gameState.isRunning = !gameState.isRunning;
+            
             if (gameState.isRunning) { 
                 gameState.lastUpdateTime = Date.now(); 
-                timerInterval = setInterval(updateTimer, 100); 
+                // Assicurati che l'intervallo sia attivo se il timer deve correre
+                if (!wasRunning) { timerInterval = setInterval(updateTimer, 100); } 
+
+                // Wall Clock Start Logic: Se non è ancora partito, impostiamo l'inizio assoluto
+                if (gameState.absoluteWallClockStart === 0) {
+                    gameState.absoluteWallClockStart = Date.now();
+                }
             } 
             else { 
+                // Non interrompiamo l'intervallo qui, poiché la pausa del Wall Clock è gestita
+                // implicitamente dalla logica di aggiornamento (che si interrompe solo a 0:00)
+                // MA: per il Game Timer, dobbiamo interrompere l'aggiornamento.
+                // L'aggiornamento Wall Clock *deve* avvenire continuamente tramite updateTimer
+                // se il Game Timer è attivo (isRunning=true) o se è in pausa ma Wall Clock deve correre.
+                
+                // Dato che Wall Clock deve correre anche durante la pausa del Game Timer, 
+                // manteniamo l'intervallo attivo, ma saltiamo l'aggiornamento del Game Clock.
+                // L'intervallo è iniziato solo se isRunning=true, quindi lo interrompiamo in pausa.
                 clearInterval(timerInterval); 
+                
+                // Rivediamo la logica: se il Wall Clock corre sempre (anche in pausa del Game Timer)
+                // fino alla fine del quarto, l'intervallo DEVE restare attivo.
+                
+                // Manteniamo l'intervallo attivo, la logica di pausa del Game Timer è in updateTimer.
+                if(!wasRunning) { // Se si sta premendo Avvia per la prima volta
+                    timerInterval = setInterval(updateTimer, 100); 
+                }
             }
             saveGameState(); updateUI();
         }
 
         function updateTimer() {
-            if (!gameState.isRunning) return;
             const now = Date.now(); 
-            const diff = now - gameState.lastUpdateTime;
-            let newTime = getRemainingTime() - diff; 
-            gameState.lastUpdateTime = now;
+            let diff = 0;
+            let newTime = getRemainingTime();
+            
+            // 1. Update Game Clock (Solo se è in esecuzione)
+            if (gameState.isRunning) {
+                diff = now - gameState.lastUpdateTime;
+                newTime = getRemainingTime() - diff; 
+                gameState.lastUpdateTime = now;
+            } else {
+                 // Aggiorna l'orologio dell'ultimo aggiornamento per evitare salti temporali futuri
+                 // quando il timer viene riavviato.
+                 gameState.lastUpdateTime = now; 
+            }
 
+            // 2. Update Wall Clock (Tempo Totale di Gioco Reale)
+            // L'orologio totale corre continuamente (anche durante la pausa del timer di gioco)
+            // ma si ferma solo quando il *Game Timer* è 0.
+            if (gameState.absoluteWallClockStart > 0) { 
+                if (newTime > 0) { // Wall Clock runs while game timer > 0
+                    gameState.totalWallTimePlayed = now - gameState.absoluteWallClockStart;
+                } else {
+                    // Quarter just ended (newTime <= 0). Finalize the wall clock time.
+                    // Assicurati di non aggiornarlo se è già stato finalizzato
+                    if (gameState.totalWallTimePlayed < (now - gameState.absoluteWallClockStart)) {
+                        gameState.totalWallTimePlayed = now - gameState.absoluteWallClockStart; 
+                    }
+                    // Non è necessario resettare absoluteWallClockStart qui.
+                }
+            }
+            
+            // 3. Gestione Fine Quarto
             if (newTime <= 0) { 
+                if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
                 setRemainingTime(0); 
                 handleQuarterEnd(true); 
             } else {
-                setRemainingTime(newTime);
+                // Solo se il Game Timer era in esecuzione, salviamo il tempo aggiornato
+                if (gameState.isRunning) {
+                    setRemainingTime(newTime);
+                }
             }
             updateUI();
         }
 
         function handleQuarterEnd(isTimeOut = false) {
-            clearInterval(timerInterval); gameState.isRunning = false;
+            // Se il timer non è già stato interrotto in updateTimer, fallo qui.
+            if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+            gameState.isRunning = false;
             
-            // NUOVO: Ferma il Wall Clock (chiamato anche da updateWallClock, ma meglio essere sicuri)
-            if (wallClockInterval) { 
-                clearInterval(wallClockInterval);
-                wallClockInterval = null;
-            }
-
+            // 1. Finalizza le rotazioni per il quarto che sta finendo
             const quarterDuration = getQuarterDuration();
             const elapsed = quarterDuration - getRemainingTime();
             updateRotationEndTimes(elapsed);
 
-            if(isTimeOut) { setRemainingTime(0); }
+            // 2. Imposta a 0:00 se il quarto è effettivamente finito
+            if(isTimeOut) {
+                setRemainingTime(0);
+            }
 
             const nextQ = NEXT_QUARTER[gameState.currentQuarter];
             if (nextQ) {
                 if(isTimeOut) {
+                    // *** Riavviare il Wall Clock: ***
+                    // Per il nuovo quarto, dobbiamo azzerare il punto di partenza del Wall Clock
+                    // per evitare che ricominci da 0. Ri-impostiamo absoluteWallClockStart 
+                    // in modo che l'accumulo continui.
+                    // Se il Wall Clock si è fermato a T_finale, il nuovo T_inizio sarà T_attuale - T_finale
+                    if(gameState.absoluteWallClockStart > 0) {
+                        gameState.absoluteWallClockStart = Date.now() - gameState.totalWallTimePlayed;
+                    }
+                    
                     gameState.currentQuarter = nextQ; 
                     
                     gameState.players.filter(p => p.status === 'court').forEach(p => {
@@ -417,7 +445,6 @@
                         perf.rotations.push({ start: 0, end: null });
                     });
                     showMessage(`Fine Quarto! Passaggio a ${nextQ}.`);
-                    startWallClock(); // NUOVO: riavvia Wall Clock
                 } else {
                     showMessage(`Tempo salvato: ${formatTime(getRemainingTime())}.`);
                 }
@@ -442,23 +469,28 @@
             const newQ = document.getElementById('quarter-select').value;
             if (newQ === gameState.currentQuarter) return;
 
-            if (gameState.isRunning) { gameState.isRunning = false; clearInterval(timerInterval); }
-            
-            // NUOVO: Ferma il Wall Clock durante il cambio quarto
-            if (wallClockInterval) { 
-                clearInterval(wallClockInterval);
-                wallClockInterval = null;
-            }
+            // 1. Interrompi il timer e salva il tempo del quarto precedente
+            if (gameState.isRunning) { gameState.isRunning = false; if (timerInterval) clearInterval(timerInterval); }
             
             const oldQ = gameState.currentQuarter;
             const durationOld = getQuarterDuration(oldQ);
             const remainingOld = gameState.quarterTimes[oldQ] || 0;
             const elapsedOld = durationOld - remainingOld;
             
+            // 2. Aggiorna i tempi di uscita/entrata nel quarto precedente
             updateRotationEndTimes(elapsedOld);
             
+            // 3. Imposta il nuovo quarto
             gameState.currentQuarter = newQ; 
             
+            // *** Riavviare il Wall Clock: ***
+            if(gameState.absoluteWallClockStart > 0) {
+                // Se il Wall Clock si era fermato a 0:00 e si cambia quarto, 
+                // dobbiamo ripristinare il punto di partenza
+                gameState.absoluteWallClockStart = Date.now() - gameState.totalWallTimePlayed;
+            }
+
+            // 4. Aggiorna le rotazioni nel nuovo quarto (logica invariata)
             const durationNew = getQuarterDuration(newQ);
             const remainingNew = gameState.quarterTimes[newQ] || durationNew;
             const elapsedNew = durationNew - remainingNew;
@@ -479,12 +511,11 @@
                  });
             }
 
-            startWallClock(); // NUOVO: Riavvia il Wall Clock
             saveGameState(); updateUI();
         }
 
 
-        // --- STATS AND ROTATION TRACKING (Non Modificate) ---
+        // --- STATS AND ROTATION TRACKING (Logic Invariata) ---
 
         function updateRotationEndTimes(elapsed) {
             gameState.players.filter(p => p.status === 'court').forEach(p => {
@@ -519,6 +550,7 @@
         function calcQuarterStats(p, qCode) {
             let tot = 0;
             const qDuration = getQuarterDuration(qCode);
+            
             let remaining = gameState.quarterTimes[qCode] || 0;
             let elapsed = qDuration - remaining;
 
@@ -598,7 +630,7 @@
             return Math.max(0, absCurrentTime - lastExitAbsTime);
         }
         
-        // --- CSV EXPORT LOGIC (Non Modificate) ---
+        // --- FUNZIONI DI ESPORTAZIONE (Logic Invariata) ---
         
         function getSimplifiedStintGrid(player) {
             const gridData = [];
@@ -613,7 +645,7 @@
                 const qCode = QUARTER_ORDER[i];
                 const qDuration = getQuarterDuration(qCode); 
                 
-                if (qDuration === 0) continue;
+                if (qDuration === 0) continue; 
                 
                 let quarterRemaining = gameState.quarterTimes[qCode] || qDuration;
                 let quarterElapsed = qDuration - quarterRemaining;
@@ -680,7 +712,7 @@
                 }
             }
             
-            return gridData.filter((_, index) => index % 2 === 0);
+            return gridData.filter((_, index) => index % 2 === 0); 
         }
         
         function getStintGridHeaders() {
@@ -712,56 +744,6 @@
             return dataHeaders;
         }
 
-        // --- DRAG/DROP AND UI (Non Modificate, solo updateUI) ---
-
-        function allowDrop(ev) { ev.preventDefault(); }
-        function handleDragStart(ev, id) { ev.dataTransfer.setData("pid", id); ev.target.classList.add('is-dragging'); }
-        function handleDragEnd(ev) { ev.target.classList.remove('is-dragging'); }
-        function handleDrop(ev) {
-            ev.preventDefault(); if (ev.target.closest('.player-card')) return; 
-            processDrop(ev.dataTransfer.getData("pid"), ev.currentTarget.id === 'court-area' ? 'court' : 'bench');
-        }
-        function handleDropOnPlayer(ev, tid) { ev.preventDefault(); ev.stopPropagation(); processSwap(ev.dataTransfer.getData("pid"), tid); }
-        function handlePlayerClick(ev, id) {
-            ev.stopPropagation();
-            if (!selectedPlayerId) { selectedPlayerId = id; updateUI(); return; }
-            if (selectedPlayerId === id) { selectedPlayerId = null; updateUI(); return; }
-            processSwap(selectedPlayerId, id); selectedPlayerId = null;
-        }
-        function handleAreaClick(areaType) { if (selectedPlayerId) { processDrop(selectedPlayerId, areaType); selectedPlayerId = null; } }
-
-        function processDrop(pid, newStatus) {
-            const p = gameState.players.find(x => x.id === pid);
-            if (!p || p.status === newStatus) return;
-            if (getRemainingTime() > 0 && newStatus === 'court' && gameState.players.filter(x => x.status === 'court').length >= 5) return showMessage("Massimo 5 in campo!");
-            
-            const oldStatus = p.status;
-            p.status = newStatus;
-            handleSubstitution(p, oldStatus, newStatus);
-            saveGameState(); updateUI();
-        }
-
-        function processSwap(id1, id2) {
-            const p1 = gameState.players.find(x => x.id === id1);
-            const p2 = gameState.players.find(x => x.id === id2);
-            if (!p1 || !p2 || p1.id === p2.id) return;
-            if (p1.status !== p2.status) {
-                const bench = p1.status === 'bench' ? p1 : p2;
-                const court = p1.status === 'bench' ? p2 : p1;
-                
-                if (getRemainingTime() > 0 && gameState.players.filter(x => x.status === 'court').length > 5) {
-                }
-
-                bench.status = 'court'; 
-                court.status = 'bench';
-                
-                handleSubstitution(court, 'court', 'bench'); 
-                handleSubstitution(bench, 'bench', 'court');
-                
-                saveGameState(); updateUI();
-            } else { showMessage("Scambio valido solo Campo <-> Panchina."); selectedPlayerId = null; updateUI(); }
-        }
-
         function exportToCSV() {
             const data = gameState.players;
             if (data.length === 0) return showMessage("Nessun dato da esportare.");
@@ -773,7 +755,9 @@
 
             // --- SEZIONE 1: TABELLINO CLASSICO ---
             csvContent += "=== TABELLINO PARTITA ===\r\n";
+            csvContent += `Tempo Totale Cronometrato (Wall Clock): ${formatTime(gameState.totalWallTimePlayed)}\r\n\r\n`; 
             
+            // 1. Riga Header
             let header = ["Numero", "Nome", "Q1", "Q2", "Q3", "Q4"];
             if (QUARTER_ORDER.includes(gameState.currentQuarter) && QUARTER_ORDER.indexOf(gameState.currentQuarter) >= QUARTER_ORDER.indexOf('OT')) {
                 header.push("OT/Extra");
@@ -781,6 +765,7 @@
             header.push("TOTALE Partita", "Stint Dettagliati (Q:Start-End)");
             csvContent += header.join(separator) + "\r\n";
 
+            // 2. Righe Dati
             sortedPlayers.forEach(p => {
                 const gameStats = calcGameStats(p); 
                 const q1 = formatTime(calcQuarterStats(p, 'Q1'));
@@ -798,7 +783,7 @@
                     row.push(ot);
                 }
                 
-                row.push(total, `"${detailedStints.replace(/"/g, '""')}"`);
+                row.push(total, `"${detailedStints.replace(/"/g, '""')}"`); 
                 csvContent += row.join(separator) + "\r\n";
             });
             csvContent += "\r\n";
@@ -817,6 +802,7 @@
             });
             csvContent += "\r\n";
 
+            // 3. Trigger Download
             const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
             const link = document.createElement("a");
             if (link.download !== undefined) { 
@@ -875,24 +861,79 @@
             return details.join(' | ');
         }
         
-        // --- UI RENDER (AGGIORNATA) ---
+        // --- DRAG/DROP AND UI (Logic Invariata) ---
+
+        function allowDrop(ev) { ev.preventDefault(); }
+        function handleDragStart(ev, id) { ev.dataTransfer.setData("pid", id); ev.target.classList.add('is-dragging'); }
+        function handleDragEnd(ev) { ev.target.classList.remove('is-dragging'); }
+        function handleDrop(ev) {
+            ev.preventDefault(); if (ev.target.closest('.player-card')) return; 
+            processDrop(ev.dataTransfer.getData("pid"), ev.currentTarget.id === 'court-area' ? 'court' : 'bench');
+        }
+        function handleDropOnPlayer(ev, tid) { ev.preventDefault(); ev.stopPropagation(); processSwap(ev.dataTransfer.getData("pid"), tid); }
+        function handlePlayerClick(ev, id) {
+            ev.stopPropagation();
+            if (!selectedPlayerId) { selectedPlayerId = id; updateUI(); return; }
+            if (selectedPlayerId === id) { selectedPlayerId = null; updateUI(); return; }
+            processSwap(selectedPlayerId, id); selectedPlayerId = null;
+        }
+        function handleAreaClick(areaType) { if (selectedPlayerId) { processDrop(selectedPlayerId, areaType); selectedPlayerId = null; } }
+
+        function processDrop(pid, newStatus) {
+            const p = gameState.players.find(x => x.id === pid);
+            if (!p || p.status === newStatus) return;
+            if (getRemainingTime() > 0 && newStatus === 'court' && gameState.players.filter(x => x.status === 'court').length >= 5) return showMessage("Massimo 5 in campo!");
+            
+            const oldStatus = p.status;
+            p.status = newStatus;
+            handleSubstitution(p, oldStatus, newStatus);
+            saveGameState(); updateUI();
+        }
+
+        function processSwap(id1, id2) {
+            const p1 = gameState.players.find(x => x.id === id1);
+            const p2 = gameState.players.find(x => x.id === id2);
+            if (!p1 || !p2 || p1.id === p2.id) return;
+            if (p1.status !== p2.status) {
+                const bench = p1.status === 'bench' ? p1 : p2;
+                const court = p1.status === 'bench' ? p2 : p1;
+                
+                if (getRemainingTime() > 0 && gameState.players.filter(x => x.status === 'court').length > 5) {
+                }
+
+                bench.status = 'court'; 
+                court.status = 'bench';
+                
+                handleSubstitution(court, 'court', 'bench'); 
+                handleSubstitution(bench, 'bench', 'court');
+                
+                saveGameState(); updateUI();
+            } else { showMessage("Scambio valido solo Campo <-> Panchina."); selectedPlayerId = null; updateUI(); }
+        }
+
+        globalThis.toggleTheme = (save=true) => {
+            const d = document.documentElement.classList.toggle('dark');
+            if(save) localStorage.setItem('theme', d?'dark':'light');
+            document.getElementById('sun-icon').classList.toggle('hidden', !d);
+            document.getElementById('moon-icon').classList.toggle('hidden', d);
+        }
+        
+        // --- UI RENDER ---
         
         function updateUI() {
             if (!gameState.players.length) return;
+
+            // Aggiorna Wall Clock
+            document.getElementById('wall-clock-display').textContent = formatTime(gameState.totalWallTimePlayed); 
+
             const btn = document.getElementById('start-pause-btn');
             btn.textContent = gameState.isRunning ? 'Pausa' : 'Avvia';
             btn.className = gameState.isRunning ? "flex-1 sm:flex-none bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-3 px-6 rounded-xl shadow-md active:transform active:scale-95 transition w-28" : "flex-1 sm:flex-none bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-xl shadow-md active:transform active:scale-95 transition w-28";
             
-            const remainingTime = getRemainingTime();
             const td = document.getElementById('timer-display');
-            td.textContent = formatTime(remainingTime);
-            td.className = `timer-display ${remainingTime===0?'text-red-600':''} tabular-nums`;
+            td.textContent = formatTime(getRemainingTime());
+            td.className = `timer-display ${getRemainingTime()===0?'text-red-600':''} tabular-nums`;
             document.getElementById('quarter-select').value = gameState.currentQuarter;
-
-            // NUOVO: Aggiorna il Wall Clock
-            const currentWallClockTime = gameState.wallClockElapsedTimes[gameState.currentQuarter] || 0;
-            document.getElementById('wall-clock-display').textContent = formatTime(currentWallClockTime);
-
 
             const ca = document.getElementById('court-area'), ba = document.getElementById('bench-area'), sa = document.getElementById('total-stats-area');
             ca.innerHTML=''; ba.innerHTML=''; sa.innerHTML='';
