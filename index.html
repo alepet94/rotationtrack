@@ -857,9 +857,20 @@
             selectedPlayerId = null;
         }
 
+        // *** CORREZIONE IMPLEMENTATA QUI ***
         function handleAreaClick(areaType) { 
-            // Se un giocatore è selezionato, lo spostiamo nell'area
+            // Se un giocatore è selezionato
             if (selectedPlayerId) { 
+                const p = gameState.players.find(x => x.id === selectedPlayerId);
+
+                // Se si tocca l'area in cui il giocatore si trova già, deseleziona.
+                if (p && p.status === areaType) {
+                    selectedPlayerId = null; 
+                    updateUI(); 
+                    return;
+                }
+                
+                // Altrimenti, prova a spostarlo
                 processDrop(selectedPlayerId, areaType); 
                 selectedPlayerId = null; 
             } 
@@ -900,8 +911,6 @@
                 saveGameState(); updateUI();
             } else { 
                 showMessage("Scambio valido solo Campo <-> Panchina."); 
-                selectedPlayerId = null; 
-                updateUI(); 
             }
         }
         
