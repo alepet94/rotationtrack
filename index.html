@@ -150,7 +150,7 @@
                 
                 <div class="flex gap-2 w-full sm:w-auto order-3 sm:order-1 justify-center">
                     <button id="start-pause-btn" onclick="toggleTimer()" class="flex-1 sm:flex-none bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-xl shadow-md active:transform active:scale-95 transition w-28">Avvia</button>
-                    <button onclick="showSetupOrGame(false); clearInterval(timerInterval); gameState.isRunning = false;" class="flex-1 sm:flex-none bg-red-500 hover:bg-red-600 text-white font-bold py-3 px-6 rounded-xl shadow-md active:transform active:scale-95 transition w-28">Reset</button>
+                    <button onclick="resetGame()" class="flex-1 sm:flex-none bg-red-500 hover:bg-red-600 text-white font-bold py-3 px-6 rounded-xl shadow-md active:transform active:scale-95 transition w-28">Reset</button>
                 </div>
             </div>
             
@@ -303,6 +303,27 @@
             gameState.players.filter(p => p.status === 'court').forEach(p => p.performance = [{ quarter: DEFAULT_QUARTER, rotations: [{ start: 0, end: null }] }]);
             saveGameState(); showSetupOrGame(true); updateUI();
         }
+        
+        // NUOVA FUNZIONE DI RESET COMPLETO
+        function resetGame() {
+            // 1. Ferma il timer
+            if (timerInterval) clearInterval(timerInterval);
+            gameState.isRunning = false;
+            
+            // 2. Resetta lo stato globale in memoria
+            gameState = { players: [], isRunning: false, lastUpdateTime: 0, currentQuarter: DEFAULT_QUARTER, quarterTimes: {}, currentBreak: null, breakTimeRemaining: 0 };
+            
+            // 3. Pulisci il Local Storage (rimozione forzata dei dati)
+            localStorage.removeItem(STORAGE_KEY);
+            localStorage.removeItem('opponentName');
+            
+            // 4. Reset UI
+            document.getElementById('opponent-name').value = '';
+            document.getElementById('quarter-select').value = DEFAULT_QUARTER;
+            showSetupOrGame(false); // Mostra il setup modal
+            updateUI(); // Forse inutile, ma pulisce eventuali residui
+        }
+
 
         // --- TIMER AND QUARTER LOGIC ---
 
@@ -370,9 +391,6 @@
                     setRemainingBreakTime(0);
                     clearInterval(timerInterval); 
                     gameState.isRunning = false;
-                    
-                    const oldQ = gameState.currentQuarter;
-                    const nextQ = NEXT_QUARTER[oldQ];
                     
                     // L'utente deve premere "Inizio Quarto" per avanzare (non automatico)
                     showMessage("Pausa finita. Premi 'Inizio Quarto' per continuare."); 
@@ -942,7 +960,14 @@
         // --- UI RENDER ---
         
         function updateUI() {
-            if (!gameState.players.length) return;
+            if (!gameState.players.length) {
+                // Se non ci sono giocatori, pulisci l'interfaccia di gioco
+                document.getElementById('court-area').innerHTML='';
+                document.getElementById('bench-area').innerHTML='';
+                document.getElementById('total-stats-area').innerHTML='';
+                document.getElementById('timer-display').textContent = formatTime(getQuarterDuration());
+                return;
+            }
             
             const btn = document.getElementById('start-pause-btn');
             const td = document.getElementById('timer-display');
@@ -951,14 +976,12 @@
             if (isBreak) {
                 // LOGICA UI PER LA PAUSA
                 const remainingBreak = getRemainingBreakTime();
-                const totalBreak = BREAK_DURATIONS_MS[gameState.currentQuarter];
                 
                 if (remainingBreak <= 0) {
                     btn.textContent = 'Inizio Quarto';
                     btn.className = "flex-1 sm:flex-none bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-xl shadow-md active:transform active:scale-95 transition w-28";
                     td.textContent = formatTime(0);
                     td.className = `timer-display text-blue-600 tabular-nums`;
-                    showMessage(`Pausa finita! Premi 'Inizio Quarto' per ${NEXT_QUARTER[gameState.currentQuarter]}`);
 
                 } else {
                     btn.textContent = gameState.isRunning ? 'Pausa Pausa' : 'Avvia Pausa';
@@ -976,7 +999,7 @@
                 btn.className = gameState.isRunning ? "flex-1 sm:flex-none bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-3 px-6 rounded-xl shadow-md active:transform active:scale-95 transition w-28" : "flex-1 sm:flex-none bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-xl shadow-md active:transform active:scale-95 transition w-28";
                 
                 td.textContent = formatTime(getRemainingTime());
-                td.className = `timer-display ${getRemainingTime()===0?'text-red-600':''} tabular-nums`;
+                td.className = `timer-display ${getRemainingTime()===0?'text-red-600':'text-red-500'} tabular-nums`;
                 document.getElementById('quarter-select').value = gameState.currentQuarter;
             }
 
@@ -997,9 +1020,9 @@
                 const cardBg = isCourt ? 'on-court' : 'bg-white dark:bg-gray-800';
                 const border = isCourt ? 'border-0' : 'border border-gray-200 dark:border-gray-600';
                 const numClass = isCourt ? 'court-number' : 'text-gray-500 dark:text-gray-400';
-                const nameClass = isCourt ? 'court-text-primary' : 'text-gray-800 dark:text-white';
+                const nameClass = isCourt ? 'text-white' : 'text-gray-800 dark:text-white';
                 const statsLabel = isCourt ? 'Cons' : (isBreak ? 'Pausa' : 'Riposo');
-                const statsVal = isCourt ? 'court-text-primary' : 'text-gray-600 dark:text-gray-300';
+                const statsVal = isCourt ? 'text-white' : 'text-gray-600 dark:text-gray-300';
                 const warnClass = warn ? 'text-red-500 font-bold animate-pulse' : (isCourt ? 'text-white' : 'text-gray-500');
 
                 const html = `
@@ -1014,11 +1037,11 @@
                     <div class="font-bold text-base leading-tight line-clamp-2 break-words ${nameClass}">${p.name}</div>
                     <div class="flex justify-between items-end mt-2 text-xs font-medium">
                         <div class="flex flex-col">
-                            <span class="uppercase text-[10px] ${statsLabel}">${statsLabel}</span>
+                            <span class="uppercase text-[10px] text-gray-400 dark:text-gray-500">${statsLabel}</span>
                             <span class="font-mono text-sm ${warnClass}">${isCourt ? formatTime(stats.currentCons) : formatTime(restTime)}</span>
                         </div>
                         <div class="flex flex-col items-end">
-                            <span class="uppercase text-[10px] ${statsLabel}">Tot (Partita)</span>
+                            <span class="uppercase text-[10px] text-gray-400 dark:text-gray-500">Tot (Partita)</span>
                             <span class="font-mono ${statsVal}">${formatTime(stats.tot)}</span>
                         </div>
                     </div>
