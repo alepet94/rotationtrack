@@ -194,16 +194,22 @@
         // Soglia di minuti consecutivi per l'allarme/densità ALTA (5 minuti)
         const DENSITY_THRESHOLD_MS = 300000; 
         
-        // CHIAVE DI SALVATAGGIO MODIFICATA (v7 - Aggiunta Wall Clock per Densità)
-        const STORAGE_KEY = 'basket_rotation_local_v7'; 
+        // CHIAVE DI SALVATAGGIO MODIFICATA (v8 - PMI Continuo)
+        const STORAGE_KEY = 'basket_rotation_local_v8'; 
         
-        // Ristrutturato gameState per gestire i tempi di tutti i quarti
+        // NEW CONSTANTS FOR PMI LOGIC (Continuous Update)
+        // Base PMI increase per minute of pure game time (minG). Used as the coefficient for minG.
+        const PMI_ACCUMULATION_RATE_PER_MINUTE = 1.2; 
+        // Approx 0.9 PMI decay per minute on bench (0.000015 * 60000ms)
+        const PMI_DECAY_RATE_PER_MS = 0.000015;      
+        
         let gameState = { players: [], isRunning: false, lastUpdateTime: 0, currentQuarter: DEFAULT_QUARTER, quarterTimes: {} };
         let timerInterval = null;
         let selectedPlayerId = null;
 
-        // NEW: Interval per l'aggiornamento continuo del Wall Clock (minT), Densità e PMI
+        // Wall Clock Interval for continuous Wall Clock/PMI updates
         let wallClockInterval = null; 
+        let lastPMIUpdateTime = Date.now(); // Per tracciare il tempo tra gli aggiornamenti del PMI
 
         // --- HELPER FUNCTIONS ---
 
@@ -226,15 +232,23 @@
         }
         function showMessage(t) { document.getElementById('modal-text').textContent = t; document.getElementById('message-modal').classList.remove('hidden'); }
         
-        // --- WALL CLOCK TRACKER ---
+        // --- WALL CLOCK TRACKER & PMI STATE UPDATE ---
 
         function startWallClockTracker() {
             // Solo se la partita è in corso e l'intervallo non è già attivo
             if (gameState.players.length > 0 && !wallClockInterval) {
-                // Aggiorna l'UI ogni secondo per ricalcolare minT, Densità e PMI
+                lastPMIUpdateTime = Date.now(); // Inizializza/reset
+                // Aggiorna PMI e UI ogni secondo
                 wallClockInterval = setInterval(() => {
-                    // Controlla che il quarto non sia finito
                     if (getRemainingTime() > 0) { 
+                        const now = Date.now();
+                        const diffMs = now - lastPMIUpdateTime;
+                        lastPMIUpdateTime = now; 
+                        
+                        // 1. UPDATE PMI STATE (Accumulation/Decay)
+                        updatePMIState(diffMs); 
+
+                        // 2. UPDATE UI (Visuals)
                         updateUI(); 
                     }
                 }, 1000); // 1 secondo
@@ -246,6 +260,58 @@
                 clearInterval(wallClockInterval);
                 wallClockInterval = null;
             }
+        }
+        
+        function updatePMIState(diffMs) {
+            if (diffMs <= 0) return;
+
+            // Time difference in minutes
+            const diffMinutes = diffMs / 60000;
+            
+            gameState.players.forEach(p => {
+                let pmiDelta = 0;
+
+                if (p.status === 'court') {
+                    // --- ACCUMULATION (ON COURT) ---
+                    
+                    // 1. Current Stint Stats (needed for density and consecutive time context)
+                    const stats = calcGameStats(p); 
+                    const consecutiveMs = stats.currentCons;
+                    const totalWallClockMs = calcCurrentStintWallClock(p); 
+                    let stintDensity = totalWallClockMs > 0 ? (consecutiveMs / totalWallClockMs) : 0;
+                    stintDensity = Math.min(1, Math.max(0, stintDensity)); 
+                    
+                    const minG_minutes = consecutiveMs / 60000;
+                    
+                    // 2. Game Clock (minG) elapsed in the last interval (only if game is running)
+                    const gameTimeElapsedMs = gameState.isRunning ? (diffMs) : 0; 
+                    const gameTimeElapsedMinutes = gameTimeElapsedMs / 60000;
+
+                    // 3. Calculation of Accumulation Rate
+                    
+                    // Base Load per Minute (adjusted by density): BaseRate * (1 + Density)
+                    const baseRateAdjusted = PMI_ACCUMULATION_RATE_PER_MINUTE * (1 + stintDensity);
+
+                    // Fatigue Factor: e^(0.1 * max(0, minG - 6))
+                    const fatigueExponent = 0.1 * Math.max(0, minG_minutes - 6);
+                    const fatigueFactor = Math.exp(fatigueExponent);
+                    
+                    // PMI Delta = Rate * GameTimeElapsed * FatigueFactor
+                    pmiDelta = baseRateAdjusted * gameTimeElapsedMinutes * fatigueFactor;
+                    
+                } else {
+                    // --- DECAY (ON BENCH) ---
+                    
+                    // Decay is applied continuously regardless of game state
+                    pmiDelta = -(PMI_DECAY_RATE_PER_MS * diffMs);
+                }
+
+                // Apply Delta and enforce minimum of 0 (and max of 100)
+                p.pmiScore = Math.max(0, p.pmiScore + pmiDelta);
+                p.pmiScore = Math.min(100, p.pmiScore); 
+            });
+            
+            saveGameState();
         }
 
         // --- INIZIALIZZAZIONE E SALVATAGGIO ---
@@ -269,6 +335,11 @@
                         QUARTER_ORDER.forEach(q => { gameState.quarterTimes[q] = QUARTER_DURATIONS_MS[q] || 0; });
                     }
                     
+                    // NEW: Ensure PMI state is initialized for loaded players
+                    gameState.players.forEach(p => {
+                        p.pmiScore = p.pmiScore !== undefined ? p.pmiScore : 0; 
+                    });
+
                     if (gameState.players.length > 0) { 
                         showSetupOrGame(true); 
                         updateUI(); 
@@ -308,7 +379,15 @@
                 const m = l.match(/^(\d+)[.\s]+\s*(.*)/);
                 const numStr = m ? m[1] : (i + 1).toString();
                 const name = m ? m[2].trim() : l.trim();
-                return { id: crypto.randomUUID(), number: numStr, name: name || `G${numStr}`, status: i < 5 ? 'court' : 'bench', performance: [] };
+                return { 
+                    id: crypto.randomUUID(), 
+                    number: numStr, 
+                    name: name || `G${numStr}`, 
+                    status: i < 5 ? 'court' : 'bench', 
+                    performance: [],
+                    // NEW: Continuous PMI State
+                    pmiScore: 0
+                };
             });
             gameState.currentQuarter = DEFAULT_QUARTER; 
             
@@ -354,7 +433,7 @@
             const now = Date.now(); 
             const diff = now - gameState.lastUpdateTime;
             let newTime = getRemainingTime() - diff; 
-            gameState.lastUpdateTime = now;
+            gameState.lastUpdateTime = now; // Aggiorna solo il Wall Clock per il Game Timer
 
             if (newTime <= 0) { 
                 setRemainingTime(0); 
@@ -362,6 +441,7 @@
             } else {
                 setRemainingTime(newTime);
             }
+            // L'aggiornamento del PMI avviene nel wallClockInterval (1000ms)
             updateUI();
         }
 
@@ -391,7 +471,7 @@
             // 2. Imposta a 0:00 se il quarto è effettivamente finito
             if(isTimeOut) {
                 setRemainingTime(0);
-                stopWallClockTracker(); // STOP IL WALL CLOCK TRACKER ALLA FINE PARTITA/QUARTO
+                // NOTA: il wallClockTracker resta attivo fino alla fine della partita per gestire il recupero in panchina
             }
 
             const nextQ = NEXT_QUARTER[gameState.currentQuarter];
@@ -406,14 +486,14 @@
                         perf.rotations.push({ start: 0, end: null, wallClockStart: Date.now(), wallClockEnd: null }); // NUOVO Wall Clock Start
                     });
                     showMessage(`Fine Quarto! Passaggio a ${nextQ}.`);
-                    startWallClockTracker(); // RIAVVIA IL TRACKER PER IL NUOVO QUARTO
+                    startWallClockTracker(); // RIAVVIA IL TRACKER SE NECESSARIO
                 } else {
                     // Se non è finito (e.g. cambio quarto manuale)
                     showMessage(`Tempo salvato: ${formatTime(remainingTime)}.`);
                 }
             } else { 
                 showMessage("Partita Finita!"); 
-                stopWallClockTracker(); // STOP DEFINITIVO
+                stopWallClockTracker(); // STOP DEFINITIVO DEL WALL CLOCK TRACKER
             }
             saveGameState(); updateUI();
         }
@@ -427,7 +507,6 @@
 
             if(gameState.isRunning) gameState.lastUpdateTime = Date.now();
             
-            // Se il tempo viene riportato sopra lo zero, assicurati che il wall clock tracker sia attivo
             if (newTime > 0) startWallClockTracker();
             
             saveGameState(); updateUI();
@@ -444,10 +523,10 @@
             const durationOld = getQuarterDuration(oldQ);
             const remainingOld = gameState.quarterTimes[oldQ] || 0;
             const elapsedOld = durationOld - remainingOld;
-            const wallClockNow = Date.now(); // Wall Clock time per la chiusura e l'apertura
+            const wallClockNow = Date.now(); 
 
             // 2. Aggiorna i tempi di uscita/entrata nel quarto precedente
-            updateRotationEndTimes(elapsedOld, wallClockNow); // Chiude le rotazioni con Wall Clock End
+            updateRotationEndTimes(elapsedOld, wallClockNow); 
             
             // 3. Imposta il nuovo quarto
             gameState.currentQuarter = newQ; 
@@ -479,17 +558,15 @@
                     const perf = getPerf(p, newQ);
                     if(perf.rotations.length && perf.rotations.at(-1).end === null) {
                         perf.rotations.at(-1).end = durationNew; 
-                        // Imposta wallClockEnd al wallClockStart + la durata intera, se wallClockStart esiste
                         if(perf.rotations.at(-1).wallClockStart) {
                             perf.rotations.at(-1).wallClockEnd = perf.rotations.at(-1).wallClockStart + durationNew;
                         } else {
-                             // Fallback in caso di dati vecchi senza wallClockStart
                              perf.rotations.at(-1).wallClockEnd = wallClockNow;
                         }
                     }
                  });
-                 // Se il nuovo quarto è finito, ferma il tracker se il game timer è fermo
-                 if (!gameState.isRunning) stopWallClockTracker();
+                 // Se il nuovo quarto è finito, non c'è bisogno di un'azione specifica sul tracker, 
+                 // perché updatePMIState(diffMs) si occupa del decadimento anche a tempo di gioco 0.
             }
 
             saveGameState(); updateUI();
@@ -500,7 +577,9 @@
 
         // Funzione semplificata che ora chiama updateRotationEndTimes con un valore di default
         function handleSubstitution(p, oldS, newS) {
-            if (getRemainingTime() <= 0) return; // Blocco modifiche su quarto finito
+            if (getRemainingTime() <= 0 && newS === 'court') { // Impedisci entrata a tempo finito, ma non uscita
+                return; 
+            }
 
             const elapsed = getQuarterDuration() - getRemainingTime();
             const wallClockNow = Date.now(); // Wall Clock time per il cambio
@@ -553,7 +632,6 @@
         }
         
         function calcQuarterStats(p, qCode) {
-            // ... (logica invariata per minG in un quarto)
             let tot = 0;
             const qDuration = getQuarterDuration(qCode);
             let remaining = gameState.quarterTimes[qCode] || 0;
@@ -632,33 +710,31 @@
                     if (gameState.quarterTimes[p.q] === 0) { lastExitAbsTime = getQuarterOffset(p.q) + getQuarterDuration(p.q); break; }
                 }
             }
+            // Se il PMI è maggiore di 0, mostriamo il tempo di recupero effettivo (Wall Clock Time)
+            // Se il PMI è 0, il recupero è tecnicamente completo, ma mostriamo comunque il tempo trascorso
+            if(player.pmiScore > 0) {
+                 // Recupero da Wall Clock Start dell'ultima rotazione chiusa a Wall Clock Now
+                 let lastWallClockEnd = 0;
+                 // Scorrimento all'indietro
+                 for (let p of playedQuarters) {
+                     if (p.idx > QUARTER_ORDER.indexOf(currentQ)) continue;
+                     if (p.rotations.length > 0) {
+                         const lastRot = p.rotations[p.rotations.length - 1];
+                         if (lastRot.wallClockEnd) { lastWallClockEnd = lastRot.wallClockEnd; break; }
+                     }
+                 }
+                 // Calcola il tempo di riposo Wall Clock
+                 const wallClockRest = Math.max(0, Date.now() - lastWallClockEnd);
+                 return wallClockRest;
+            }
+            
+            // Fallback: se PMI è zero, usiamo la metrica Game Clock
             return Math.max(0, absCurrentTime - lastExitAbsTime);
         }
 
         // --- FUNZIONI DI CALCOLO METRICA FATICA PMI (Progressive Minute Index) ---
+        // La funzione calcPMI non è più necessaria perché il PMI è calcolato in continuo da updatePMIState
 
-        /**
-         * Calcola il Punteggio della Metrica Finale (PMI) per uno Stint.
-         * Formula: MetricaFinale = minG * (1 + stintD) * e^(0.1 * max(0, minG_minutes - 6))
-         * @param {number} consecutiveMs - Tempo consecutivo in campo (minG, in ms).
-         * @param {number} stintD - Densità dello stint (valore tra 0 e 1).
-         * @returns {number} Il punteggio PMI.
-         */
-        function calcPMI(consecutiveMs, stintD) {
-            // Aggiungo un controllo per evitare PMI elevati quando minG è quasi zero
-            if (consecutiveMs < 1000 || stintD === 0) return 0;
-            
-            const minG_minutes = consecutiveMs / 60000; // minG convertito in minuti
-            
-            // Carico Base = minG * (1 + stintD)
-            const baseLoad = minG_minutes * (1 + stintD); 
-            
-            // Fattore Fatica = e^(0.1 * max(0, minG - 6))
-            const fatigueExponent = 0.1 * Math.max(0, minG_minutes - 6);
-            const fatigueFactor = Math.exp(fatigueExponent);
-            
-            return baseLoad * fatigueFactor;
-        }
         
         // --- GRIGLIA ROTAZIONI (CSV) ---
         
@@ -849,7 +925,7 @@
             if (QUARTER_ORDER.includes(gameState.currentQuarter) && QUARTER_ORDER.indexOf(gameState.currentQuarter) >= QUARTER_ORDER.indexOf('OT')) {
                 header.push("OT/Extra");
             }
-            header.push("TOTALE Partita", "Stint Dettagliati (Q:ClockStart-ClockEnd)");
+            header.push("TOTALE Partita", "PMI Finale", "Stint Dettagliati (Q:ClockStart-ClockEnd)");
             csvContent += header.join(separator) + "\r\n";
 
             // 2. Righe Dati
@@ -860,6 +936,7 @@
                 const q3 = formatTime(calcQuarterStats(p, 'Q3'));
                 const q4 = formatTime(calcQuarterStats(p, 'Q4'));
                 const total = formatTime(gameStats.tot);
+                const pmi = p.pmiScore.toFixed(1);
                 
                 const detailedStints = getDetailedStints(p); 
                 
@@ -870,7 +947,7 @@
                     row.push(ot);
                 }
                 
-                row.push(total, `"${detailedStints.join(' | ')}"`);
+                row.push(total, pmi, `"${detailedStints.join(' | ')}"`);
                 csvContent += row.join(separator) + "\r\n";
             });
             
@@ -951,7 +1028,7 @@
             gameState.players.forEach(p => {
                 const stats = calcGameStats(p); 
                 
-                // *** CALCOLO NUOVE METRICHE (minG, minT, stintD, PMI) ***
+                // *** CALCOLO METRICHE PER VISUALIZZAZIONE ***
                 
                 // 1. Minuti Giocati (minG) - Game Clock Time (Consecutive Time)
                 const consecutiveMs = p.status === 'court' ? stats.currentCons : 0;
@@ -960,12 +1037,11 @@
                 const totalWallClockMs = calcCurrentStintWallClock(p); 
                 
                 // 3. Densità (stintD) = minG / minT
-                // Si assicura che non ci sia divisione per zero e che il valore sia tra 0 e 1.
                 let stintDensity = totalWallClockMs > 0 ? (consecutiveMs / totalWallClockMs) : 0;
                 stintDensity = Math.min(1, Math.max(0, stintDensity)); 
                 
-                // 4. PMI (Metrica Finale)
-                const pmiScore = calcPMI(consecutiveMs, stintDensity);
+                // 4. PMI (Metrica Finale) - ORA LETTA DALLO STATO CONTINUO
+                const pmiScore = p.pmiScore;
                 
                 const cardHTML = getPlayerCardHTML(p, stats.tot, consecutiveMs, stintDensity, pmiScore);
 
@@ -999,6 +1075,7 @@
             const restFormatted = formatTime(calcRestStats(p));
             
             const pmiThreshold = 12; 
+            // Usa il valore del PMI Continuo
             const pmiStatusColor = pmi >= pmiThreshold ? 'text-red-500 dark:text-red-400' : (pmi >= 6 ? 'text-yellow-500 dark:text-yellow-400' : 'text-gray-900 dark:text-white');
             const pmiStatusIcon = pmi >= pmiThreshold ? '🔥' : '';
             
@@ -1073,12 +1150,8 @@
             const totalStats = sortedPlayers.map(p => {
                 const stats = calcGameStats(p); 
                 
-                const consecutiveMs = p.status === 'court' ? stats.currentCons : 0;
-                const totalWallClockMs = calcCurrentStintWallClock(p); 
-                let stintDensity = totalWallClockMs > 0 ? (consecutiveMs / totalWallClockMs) : 0;
-                stintDensity = Math.min(1, Math.max(0, stintDensity)); 
-                
-                const pmiScore = calcPMI(consecutiveMs, stintDensity);
+                // NEW: Read the stored, continuous PMI score
+                const pmiScore = p.pmiScore;
                 
                 return {
                     p,
@@ -1111,7 +1184,7 @@
             if (gameState.players.length > 0) {
                 showSetupOrGame(true);
                 updateUI();
-                startWallClockTracker(); // Assicura che sia attivo anche se il timer è fermo
+                startWallClockTracker(); // Assicura che sia attivo
             } else {
                 showSetupOrGame(false);
             }
@@ -1133,6 +1206,12 @@
                     if (Object.keys(gameState.quarterTimes).length === 0) {
                         QUARTER_ORDER.forEach(q => { gameState.quarterTimes[q] = QUARTER_DURATIONS_MS[q] || 0; });
                     }
+                    
+                    // NEW: Ensure PMI state is initialized for loaded players
+                    gameState.players.forEach(p => {
+                        p.pmiScore = p.pmiScore !== undefined ? p.pmiScore : 0; 
+                    });
+
                     if(localStorage.getItem('theme')==='dark') toggleTheme(false); 
                     const savedOpponentName = localStorage.getItem('opponentName');
                     if (savedOpponentName) { document.getElementById('opponent-name').value = savedOpponentName; }
