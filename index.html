@@ -1041,4 +1041,12 @@
                     <td class="px-4 py-2 text-right font-mono text-gray-500">${formatTime(calcQuarterStats(p, 'Q3'))}</td>
                     <td class="px-4 py-2 text-right font-mono text-gray-500">${formatTime(calcQuarterStats(p, 'Q4'))}</td>`;
                 if (gameState.currentQuarter === 'OT' || gameState.currentQuarter === '2OT') {
-                    tbl += `<td class="px-4 py-2 text-right font-mono text-gray-500">${formatTime(calcQuarterStats(p, 'OT') + calcQuarterStats(p, '2OT'))}</td>
+                    tbl += `<td class="px-4 py-2 text-right font-mono text-gray-500">${formatTime(calcQuarterStats(p, 'OT') + calcQuarterStats(p, '2OT'))}</td>`;
+                }
+                tbl += `<td class="px-4 py-2 text-right font-mono text-blue-600 dark:text-blue-400 font-bold">${formatTime(gameSt.tot)}</td></tr>`;
+            });
+            sa.innerHTML = tbl + '</tbody></table>';
+        }
+    </script>
+</body>
+</html>
