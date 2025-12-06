@@ -236,7 +236,7 @@
         
         const COLD_STATUS_THRESHOLD_MS = 720000; // 12 minuti di riposo totale
 
-        const STORAGE_KEY = 'basket_rotation_local_v9'; // Versione aggiornata
+        const STORAGE_KEY = 'basket_rotation_local_v10'; // Versione aggiornata
         const PMI_ACCUMULATION_RATE_PER_MINUTE = 1.2;
         const PMI_DECAY_RATE_PER_MS = 0.000015;
         
@@ -261,6 +261,7 @@
             return QUARTER_DURATIONS_MS[q] || 0;
         }
 
+        /** Formatta il tempo da millisecondi a mm:ss. */
         function formatTime(ms) { 
             const totalSeconds = Math.floor(Math.max(0,ms)/1000);
             const minutes = Math.floor(totalSeconds / 60).toString().padStart(2,'0');
@@ -296,12 +297,13 @@
             if (player.status === 'court') {
                 const perf = getPerf(player, gameState.currentQuarter);
                 const lastRotation = perf.rotations.at(-1);
+                // Il tempo di gioco consecutivo è il tempo trascorso del quarto - il tempo di inizio stint
                 if (lastRotation && lastRotation.end === null) {
                     currentCons = (getQuarterDuration() - getRemainingTime()) - lastRotation.start;
                 }
             }
             return {
-                currentCons: currentCons, // minG di questo stint
+                currentCons: currentCons, // minG di questo stint (in ms del cronometro)
             };
         }
 
@@ -312,6 +314,7 @@
             if (gameState.players.length > 0 && !wallClockInterval) {
                 lastPMIUpdateTime = Date.now();
                 wallClockInterval = setInterval(() => {
+                    // Controlla se c'è tempo di gioco rimanente O se ci sono giocatori in panchina (per il riposo)
                     if (getRemainingTime() > 0 || gameState.players.some(p => p.status === 'bench')) { 
                         const now = Date.now();
                         const diffMs = now - lastPMIUpdateTime;
@@ -365,8 +368,7 @@
                 } else {
                     // --- DECAY (ON BENCH) ---
                     
-                    // NUOVA LOGICA: ACCUMULA TEMPO DI RIPOSO TOTALE 
-                    // Il riposo si accumula SEMPRE se il giocatore è in panchina, anche se il cronometro è fermo.
+                    // Il riposo si accumula SEMPRE se il giocatore è in panchina (requisito)
                     p.totalRestWallClockMs += diffMs; 
                     
                     // Decay is applied continuously regardless of game state
@@ -402,7 +404,6 @@
                     gameState.players.forEach(p => {
                         p.pmiScore = p.pmiScore !== undefined ? p.pmiScore : 0; 
                         p.totalRestWallClockMs = p.totalRestWallClockMs !== undefined ? p.totalRestWallClockMs : 0;
-                        // NEW: Aggiungi totalGameTimeMs se non presente nel vecchio salvataggio
                         p.totalGameTimeMs = p.totalGameTimeMs !== undefined ? p.totalGameTimeMs : 0; 
                     });
 
@@ -455,7 +456,7 @@
                     performance: [],
                     pmiScore: 0,
                     totalRestWallClockMs: 0,
-                    totalGameTimeMs: 0 // NUOVO: Tempo totale di gioco
+                    totalGameTimeMs: 0 
                 };
             });
             gameState.currentQuarter = DEFAULT_QUARTER; 
@@ -478,7 +479,6 @@
         }
 
         // --- TIMER AND QUARTER LOGIC --- 
-        // MODIFICATA: Aggiunta logica per il pulsante
         function toggleTimer(force = false) { 
             if (getRemainingTime() <= 0 && !force) { 
                 showMessage("Fine quarto.");
@@ -492,16 +492,16 @@
                 gameState.lastUpdateTime = Date.now(); 
                 timerInterval = setInterval(updateTimer, 100);
                 startWallClockTracker(); 
-                // Aggiornamento UI pulsante
+                // Aggiornamento UI pulsante: Avvia (Verde) -> Pausa (Arancione)
                 btn.textContent = 'Pausa';
-                btn.classList.replace('bg-green-600', 'bg-red-600');
-                btn.classList.replace('hover:bg-green-700', 'hover:bg-red-700');
+                btn.classList.replace('bg-green-600', 'bg-orange-500');
+                btn.classList.replace('hover:bg-green-700', 'hover:bg-orange-600');
             } else { 
                 clearInterval(timerInterval); 
-                // Aggiornamento UI pulsante
+                // Aggiornamento UI pulsante: Pausa (Arancione) -> Avvia (Verde)
                 btn.textContent = 'Avvia';
-                btn.classList.replace('bg-red-600', 'bg-green-600');
-                btn.classList.replace('hover:bg-red-700', 'hover:bg-green-700');
+                btn.classList.replace('bg-orange-500', 'bg-green-600');
+                btn.classList.replace('hover:bg-orange-600', 'hover:bg-green-700');
             } 
             saveGameState(); updateUI();
         } 
@@ -521,12 +521,14 @@
             updateUI();
         } 
         
+        // AGGIORNATO: Correzione del fattore moltiplicativo (era * 1000)
         function updateRotationEndTimes(elapsed, wallClockEnd = null) { 
             gameState.players.filter(p => p.status === 'court').forEach(p => { 
                 const perf = getPerf(p, gameState.currentQuarter); 
                 if(perf.rotations.length && perf.rotations.at(-1).end === null) { 
                     const lastStintActiveTime = elapsed - perf.rotations.at(-1).start;
-                    p.totalGameTimeMs += lastStintActiveTime * 1000; // Accumula il minG (tempo attivo)
+                    // Correzione: lastStintActiveTime è già in millisecondi del cronometro
+                    p.totalGameTimeMs += lastStintActiveTime; 
                     
                     perf.rotations.at(-1).end = elapsed; 
                     if(wallClockEnd) perf.rotations.at(-1).wallClockEnd = wallClockEnd; 
@@ -542,7 +544,6 @@
             const elapsed = quarterDuration - remainingTime; 
             const wallClockNow = Date.now(); 
             
-            // Aggiorna totalGameTimeMs e chiude le rotazioni con il tempo attivo (minG)
             updateRotationEndTimes(elapsed, wallClockNow); 
             
             if(isTimeOut) { setRemainingTime(0); } 
@@ -551,7 +552,6 @@
             if (nextQ) { 
                 if(isTimeOut) { 
                     gameState.currentQuarter = nextQ;
-                    // Prepara i giocatori in campo per il nuovo quarto (la nuova rotazione inizia a tempo 0:00 del nuovo quarto)
                     gameState.players.filter(p => p.status === 'court').forEach(p => { 
                         let perf = getPerf(p, nextQ); 
                         perf.rotations.push({ start: 0, end: null, wallClockStart: Date.now(), wallClockEnd: null }); 
@@ -584,7 +584,6 @@
             }
             const newQuarter = document.getElementById('quarter-select').value;
             if (newQuarter !== gameState.currentQuarter) {
-                // Finalizza le rotazioni nel quarto uscente prima di cambiare
                 const quarterDuration = getQuarterDuration();
                 const remainingTime = getRemainingTime();
                 const elapsed = quarterDuration - remainingTime;
@@ -597,7 +596,7 @@
             }
         }
 
-        // --- DRAG AND DROP / SUBSTITUTION LOGIC ---
+        // --- SUBSTITUTION LOGIC (FIXED TIME CALC) ---
         
         function handleAreaClick(area) {
             if (selectedPlayerId) {
@@ -643,13 +642,47 @@
                 const lastRotation = perf.rotations.at(-1);
                 if (lastRotation && lastRotation.end === null) {
                     const lastStintActiveTime = elapsed - lastRotation.start;
-                    player.totalGameTimeMs += lastStintActiveTime * 1000; // Aggiorna il Tempo Totale di Gioco (minG)
+                    // Correzione: lastStintActiveTime è già in millisecondi del cronometro
+                    player.totalGameTimeMs += lastStintActiveTime; 
                     
                     lastRotation.end = elapsed;
                     lastRotation.wallClockEnd = wallClockNow;
                 }
             }
             saveGameState();
+        }
+        
+        function handlePlayerClick(playerId) {
+             const player = gameState.players.find(p => p.id === playerId);
+             
+             if (player.status === 'court') {
+                 // Logica Sostituzione: Un giocatore in campo viene selezionato per uscire
+                 if (selectedPlayerId === playerId) {
+                     selectedPlayerId = null; // Deseleziona
+                 } else {
+                     selectedPlayerId = playerId;
+                 }
+                 
+             } else {
+                 // Logica Ingresso: Un giocatore in panchina può entrare se c'è un posto libero o un giocatore selezionato
+                 
+                 const courtPlayers = gameState.players.filter(p => p.status === 'court');
+                 const playerToSubOut = selectedPlayerId ? gameState.players.find(p => p.id === selectedPlayerId) : null;
+                 
+                 if (playerToSubOut && playerToSubOut.status === 'court') {
+                     // Caso 1: Sostituzione 1-a-1 (swap)
+                     performSubstitution(playerToSubOut, 'bench');
+                     performSubstitution(player, 'court');
+                 } else if (courtPlayers.length < 5) {
+                     // Caso 2: Ingresso semplice (se ci sono meno di 5 in campo)
+                     performSubstitution(player, 'court');
+                 } else {
+                     // Caso 3: Nessun giocatore selezionato in campo e campo pieno
+                     showMessage("Il campo è pieno. Seleziona un giocatore in campo da sostituire.");
+                 }
+                 selectedPlayerId = null;
+             }
+             updateUI();
         }
 
         // --- RENDERING & UI ---
@@ -672,7 +705,7 @@
             if (isCourt) {
                 // Giocatori in campo
                 const stats = calcGameStats(player);
-                const consecutiveTime = formatTime(stats.currentCons * 1000); // minG dello stint
+                const consecutiveTime = formatTime(stats.currentCons);
                 
                 detailsHtml = `
                     <div class="flex flex-col">
@@ -727,56 +760,22 @@
             `;
         }
         
-        // La logica di base per il click (toggla la selezione)
-        function handlePlayerClick(playerId) {
-             const player = gameState.players.find(p => p.id === playerId);
-             
-             if (player.status === 'court') {
-                 // Logica Sostituzione: Un giocatore in campo viene selezionato per uscire
-                 if (selectedPlayerId === playerId) {
-                     selectedPlayerId = null; // Deseleziona
-                 } else {
-                     selectedPlayerId = playerId;
-                 }
-                 
-             } else {
-                 // Logica Ingresso: Un giocatore in panchina può entrare se c'è un posto libero o un giocatore selezionato
-                 
-                 const courtPlayers = gameState.players.filter(p => p.status === 'court');
-                 const playerToSubOut = selectedPlayerId ? gameState.players.find(p => p.id === selectedPlayerId) : null;
-                 
-                 if (playerToSubOut && playerToSubOut.status === 'court') {
-                     // Caso 1: Sostituzione 1-a-1
-                     performSubstitution(playerToSubOut, 'bench');
-                     performSubstitution(player, 'court');
-                 } else if (courtPlayers.length < 5) {
-                     // Caso 2: Ingresso semplice (se ci sono meno di 5 in campo)
-                     performSubstitution(player, 'court');
-                 } else {
-                     // Caso 3: Nessun giocatore selezionato in campo e campo pieno
-                     showMessage("Il campo è pieno. Seleziona un giocatore in campo da sostituire.");
-                 }
-                 selectedPlayerId = null;
-             }
-             updateUI();
-        }
-
         function updateUI() {
             const quarterTime = getRemainingTime();
             document.getElementById('timer-display').textContent = formatTime(quarterTime);
 
             document.getElementById('quarter-select').value = gameState.currentQuarter;
             
-            // Aggiorna lo stato del pulsante (risolve il bug)
+            // Aggiorna lo stato del pulsante (Correzione Colore Pausa)
             const btn = document.getElementById('start-pause-btn');
             if (gameState.isRunning) {
                 btn.textContent = 'Pausa';
-                btn.classList.replace('bg-green-600', 'bg-red-600');
-                btn.classList.replace('hover:bg-green-700', 'hover:bg-red-700');
+                btn.classList.replace('bg-green-600', 'bg-orange-500');
+                btn.classList.replace('hover:bg-green-700', 'hover:bg-orange-600');
             } else {
                 btn.textContent = 'Avvia';
-                btn.classList.replace('bg-red-600', 'bg-green-600');
-                btn.classList.replace('hover:bg-red-700', 'hover:bg-green-700');
+                btn.classList.replace('bg-orange-500', 'bg-green-600');
+                btn.classList.replace('hover:bg-orange-600', 'hover:bg-green-700');
             }
 
 
