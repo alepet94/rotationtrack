@@ -27,7 +27,7 @@
         body { font-family: 'Inter', sans-serif; overscroll-behavior-y: contain; transition: background-color 0.3s, color 0.3s;
         }
         
-        /* COURT STYLES - SCORRIMENTO ATTIVO */
+        /* COURT STYLES */
         .court-area {
             background-color: #eebb88;
             background-image: repeating-linear-gradient(0deg, transparent 0px, transparent 58px, rgba(160, 82, 45, 0.15) 59px, rgba(160, 82, 45, 0.15) 60px), repeating-linear-gradient(0deg, rgba(255,255,255,0.05) 0px, rgba(255,255,255,0.05) 30px, transparent 30px, transparent 60px);
@@ -73,7 +73,7 @@
             box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
         .player-card:active { transform: scale(0.96);
         }
-        /* NUOVO STILE COLD STATUS */
+        /* STILE COLD STATUS */
         .player-card.cold-status {
             background-color: #3b82f640; /* Blue-500 light, cold background */
             border: 2px solid #3b82f6;
@@ -102,12 +102,6 @@
         .custom-scroll::-webkit-scrollbar { width: 6px;
         }
         .custom-scroll::-webkit-scrollbar-thumb { background-color: #cbd5e1; border-radius: 20px;
-        }
-        .is-dragging { opacity: 0.5; transform: scale(0.95);
-        }
-        .stats-row:nth-child(even) { background-color: rgba(0,0,0,0.03);
-        }
-        .dark .stats-row:nth-child(even) { background-color: rgba(255,255,255,0.02);
         }
     </style>
 </head>
@@ -192,7 +186,7 @@
                     <button id="start-pause-btn" onclick="toggleTimer()" class="flex-1 sm:flex-none bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-xl shadow-md active:transform active:scale-95 
                     transition w-28">Avvia</button>
                     <button onclick="showSetupOrGame(false);
-                    clearInterval(timerInterval); gameState.isRunning = false;" class="flex-1 sm:flex-none bg-red-500 hover:bg-red-600 text-white font-bold py-3 px-6 rounded-xl shadow-md active:transform active:scale-95 transition w-28">Reset</button>
+                    clearInterval(timerInterval); stopWallClockTracker(); gameState.isRunning = false;" class="flex-1 sm:flex-none bg-red-500 hover:bg-red-600 text-white font-bold py-3 px-6 rounded-xl shadow-md active:transform active:scale-95 transition w-28">Reset</button>
                 </div>
             </div>
             
@@ -240,14 +234,9 @@
         const NEXT_QUARTER = { 'Q1': 'Q2', 'Q2': 'Q3', 'Q3': 'Q4', 'Q4': 'OT', 'OT': '2OT' };
         const DEFAULT_QUARTER = 'Q1';
         
-        // Soglia di minuti consecutivi per l'allarme/densità ALTA (5 minuti)
-        const DENSITY_THRESHOLD_MS = 300000;
-        // Soglia per l'allarme "Cold Status" (12 minuti di riposo totale)
-        const COLD_STATUS_THRESHOLD_MS = 720000; 
+        const COLD_STATUS_THRESHOLD_MS = 720000; // 12 minuti di riposo totale
 
-        // CHIAVE DI SALVATAGGIO MODIFICATA (v8 - PMI Continuo)
-        const STORAGE_KEY = 'basket_rotation_local_v8';
-        // NEW CONSTANTS FOR PMI LOGIC (Continuous Update)
+        const STORAGE_KEY = 'basket_rotation_local_v9'; // Versione aggiornata
         const PMI_ACCUMULATION_RATE_PER_MINUTE = 1.2;
         const PMI_DECAY_RATE_PER_MS = 0.000015;
         
@@ -312,8 +301,7 @@
                 }
             }
             return {
-                currentCons: currentCons,
-                // Altre statistiche...
+                currentCons: currentCons, // minG di questo stint
             };
         }
 
@@ -324,21 +312,12 @@
             if (gameState.players.length > 0 && !wallClockInterval) {
                 lastPMIUpdateTime = Date.now();
                 wallClockInterval = setInterval(() => {
-                    // Update del Game Timer (solo se isRunning)
-                    if (gameState.isRunning) {
-                         // L'aggiornamento del timer è ancora su updateTimer (100ms) per la precisione
-                         // ma il wall clock è cruciale per PMI/Decay
-                    }
-
-                    if (getRemainingTime() > 0) { 
+                    if (getRemainingTime() > 0 || gameState.players.some(p => p.status === 'bench')) { 
                         const now = Date.now();
                         const diffMs = now - lastPMIUpdateTime;
                         lastPMIUpdateTime = now; 
                         
-                        // 1. UPDATE PMI STATE (Accumulation/Decay)
                         updatePMIState(diffMs); 
-
-                        // 2. UPDATE UI (Visuals)
                         updateUI(); 
                     }
                 }, 1000);
@@ -371,6 +350,7 @@
                     
                     const minG_minutes = consecutiveMs / 60000;
            
+                    // La PMI si accumula solo se il cronometro è in esecuzione
                     const gameTimeElapsedMs = gameState.isRunning ? (diffMs) : 0; 
                     const gameTimeElapsedMinutes = gameTimeElapsedMs / 60000;
                     
@@ -379,21 +359,21 @@
                     const fatigueFactor = Math.exp(fatigueExponent);
                     
                     pmiDelta = baseRateAdjusted * gameTimeElapsedMinutes * fatigueFactor;
-
-                    // IMPORTANTE: Se un giocatore entra, si azzera il tempo di riposo
-                    p.totalRestWallClockMs = 0; // Azzera il riposo appena entrato
+                    
+                    p.totalRestWallClockMs = 0; 
 
                 } else {
                     // --- DECAY (ON BENCH) ---
                     
-                    // NUOVA LOGICA: ACCUMULA TEMPO DI RIPOSO TOTALE (Wall Clock Time)
+                    // NUOVA LOGICA: ACCUMULA TEMPO DI RIPOSO TOTALE 
+                    // Il riposo si accumula SEMPRE se il giocatore è in panchina, anche se il cronometro è fermo.
                     p.totalRestWallClockMs += diffMs; 
                     
                     // Decay is applied continuously regardless of game state
                     pmiDelta = -(PMI_DECAY_RATE_PER_MS * diffMs);
                 }
 
-                // Apply Delta and enforce minimum of 0 (and max of 100)
+                // Apply Delta and enforce limits
                 p.pmiScore = Math.max(0, p.pmiScore + pmiDelta);
                 p.pmiScore = Math.min(100, p.pmiScore); 
             });
@@ -410,7 +390,7 @@
                     const loaded = JSON.parse(saved);
                     gameState = {
                         players: loaded.players || [],
-                        isRunning: false, 
+                        isRunning: loaded.isRunning || false, 
                         quarterTimes: loaded.quarterTimes || {}, 
                         lastUpdateTime: 0,
                         currentQuarter: loaded.currentQuarter || DEFAULT_QUARTER
@@ -419,16 +399,21 @@
                         QUARTER_ORDER.forEach(q => { gameState.quarterTimes[q] = QUARTER_DURATIONS_MS[q] || 0; });
                     }
                     
-                    // NEW: Ensure PMI state and NEW totalRestWallClockMs is initialized for loaded players
                     gameState.players.forEach(p => {
                         p.pmiScore = p.pmiScore !== undefined ? p.pmiScore : 0; 
-                        p.totalRestWallClockMs = p.totalRestWallClockMs !== undefined ? p.totalRestWallClockMs : 0; // NUOVO
+                        p.totalRestWallClockMs = p.totalRestWallClockMs !== undefined ? p.totalRestWallClockMs : 0;
+                        // NEW: Aggiungi totalGameTimeMs se non presente nel vecchio salvataggio
+                        p.totalGameTimeMs = p.totalGameTimeMs !== undefined ? p.totalGameTimeMs : 0; 
                     });
 
                     if (gameState.players.length > 0) { 
                         showSetupOrGame(true);
                         updateUI(); 
                         startWallClockTracker(); 
+                        if (loaded.isRunning) {
+                            // Riavvia il timer (corregge l'UI del pulsante)
+                            toggleTimer(true); 
+                        }
                     } 
                     else { showSetupOrGame(false);
                     }
@@ -469,7 +454,8 @@
                     status: i < 5 ? 'court' : 'bench', 
                     performance: [],
                     pmiScore: 0,
-                    totalRestWallClockMs: 0 // NUOVO: Inizializzato a 0
+                    totalRestWallClockMs: 0,
+                    totalGameTimeMs: 0 // NUOVO: Tempo totale di gioco
                 };
             });
             gameState.currentQuarter = DEFAULT_QUARTER; 
@@ -484,7 +470,7 @@
                 rotations: [{ 
                     start: 0, 
                     end: null, 
-                    wallClockStart: initialWallClockStart, // Wall Clock Start
+                    wallClockStart: initialWallClockStart,
                     wallClockEnd: null 
                 }] 
             }]);
@@ -492,18 +478,30 @@
         }
 
         // --- TIMER AND QUARTER LOGIC --- 
-        function toggleTimer() { 
-            if (getRemainingTime() <= 0) { 
+        // MODIFICATA: Aggiunta logica per il pulsante
+        function toggleTimer(force = false) { 
+            if (getRemainingTime() <= 0 && !force) { 
                 showMessage("Fine quarto.");
                 gameState.isRunning = false; saveGameState(); updateUI(); return; 
             } 
+            
             gameState.isRunning = !gameState.isRunning; 
+            const btn = document.getElementById('start-pause-btn');
+
             if (gameState.isRunning) { 
                 gameState.lastUpdateTime = Date.now(); 
                 timerInterval = setInterval(updateTimer, 100);
                 startWallClockTracker(); 
+                // Aggiornamento UI pulsante
+                btn.textContent = 'Pausa';
+                btn.classList.replace('bg-green-600', 'bg-red-600');
+                btn.classList.replace('hover:bg-green-700', 'hover:bg-red-700');
             } else { 
                 clearInterval(timerInterval); 
+                // Aggiornamento UI pulsante
+                btn.textContent = 'Avvia';
+                btn.classList.replace('bg-red-600', 'bg-green-600');
+                btn.classList.replace('hover:bg-red-700', 'hover:bg-green-700');
             } 
             saveGameState(); updateUI();
         } 
@@ -527,6 +525,9 @@
             gameState.players.filter(p => p.status === 'court').forEach(p => { 
                 const perf = getPerf(p, gameState.currentQuarter); 
                 if(perf.rotations.length && perf.rotations.at(-1).end === null) { 
+                    const lastStintActiveTime = elapsed - perf.rotations.at(-1).start;
+                    p.totalGameTimeMs += lastStintActiveTime * 1000; // Accumula il minG (tempo attivo)
+                    
                     perf.rotations.at(-1).end = elapsed; 
                     if(wallClockEnd) perf.rotations.at(-1).wallClockEnd = wallClockEnd; 
                 } 
@@ -534,23 +535,28 @@
         } 
         
         function handleQuarterEnd(isTimeOut = false) { 
-            clearInterval(timerInterval); gameState.isRunning = false;
+            toggleTimer(); // Mette in pausa e aggiorna il pulsante
+            
             const quarterDuration = getQuarterDuration(); 
             const remainingTime = getRemainingTime();
             const elapsed = quarterDuration - remainingTime; 
             const wallClockNow = Date.now(); 
-            updateRotationEndTimes(elapsed, wallClockNow);
+            
+            // Aggiorna totalGameTimeMs e chiude le rotazioni con il tempo attivo (minG)
+            updateRotationEndTimes(elapsed, wallClockNow); 
+            
             if(isTimeOut) { setRemainingTime(0); } 
+            
             const nextQ = NEXT_QUARTER[gameState.currentQuarter];
             if (nextQ) { 
                 if(isTimeOut) { 
                     gameState.currentQuarter = nextQ;
+                    // Prepara i giocatori in campo per il nuovo quarto (la nuova rotazione inizia a tempo 0:00 del nuovo quarto)
                     gameState.players.filter(p => p.status === 'court').forEach(p => { 
                         let perf = getPerf(p, nextQ); 
                         perf.rotations.push({ start: 0, end: null, wallClockStart: Date.now(), wallClockEnd: null }); 
                     });
                     showMessage(`Fine Quarto! Passaggio a ${nextQ}.`); 
-                    startWallClockTracker(); 
                 } else { 
                     showMessage(`Tempo salvato: ${formatTime(remainingTime)}.`);
                 } 
@@ -621,8 +627,7 @@
             const wallClockNow = Date.now();
             
             if (newStatus === 'court') {
-                // Esegue il calcolo e resetta il tempo di riposo in updatePMIState.
-                // Inizia una nuova rotazione
+                // Logica PMI: Ingresso. Nuova rotazione
                 let perf = getPerf(player, gameState.currentQuarter);
                 perf.rotations.push({ 
                     start: elapsed, 
@@ -630,13 +635,16 @@
                     wallClockStart: wallClockNow, 
                     wallClockEnd: null 
                 });
-                // PMI Logic: il tempo di riposo totale viene resettato in updatePMIState
+                player.totalRestWallClockMs = 0; // Azzera il riposo totale all'ingresso
                 
             } else { // newStatus === 'bench'
-                // Chiude la rotazione uscente
+                // Logica PMI: Uscita. Chiude rotazione e aggiorna totalGameTimeMs (minG)
                 const perf = getPerf(player, gameState.currentQuarter);
                 const lastRotation = perf.rotations.at(-1);
                 if (lastRotation && lastRotation.end === null) {
+                    const lastStintActiveTime = elapsed - lastRotation.start;
+                    player.totalGameTimeMs += lastStintActiveTime * 1000; // Aggiorna il Tempo Totale di Gioco (minG)
+                    
                     lastRotation.end = elapsed;
                     lastRotation.wallClockEnd = wallClockNow;
                 }
@@ -658,12 +666,14 @@
             
             let coldStatusClass = '';
             let coldStatusIcon = '';
+            
+            const totalGameTime = formatTime(player.totalGameTimeMs);
 
             if (isCourt) {
                 // Giocatori in campo
                 const stats = calcGameStats(player);
-                const consecutiveTime = formatTime(stats.currentCons);
-
+                const consecutiveTime = formatTime(stats.currentCons * 1000); // minG dello stint
+                
                 detailsHtml = `
                     <div class="flex flex-col">
                         <span class="text-xs font-semibold uppercase text-gray-400">Minuti Cons.</span>
@@ -696,7 +706,7 @@
                 `;
             }
 
-            // Classe per la selezione (non usato nel click-to-sub ma lasciato per coerenza)
+            // Classe per la selezione
             const selectionClass = player.id === selectedPlayerId ? 'selected-card ring-yellow-400 ring-2' : '';
 
             return `
@@ -705,7 +715,10 @@
                      onclick="handlePlayerClick('${player.id}')">
                     <div class="flex justify-between items-start">
                         <div class="court-number">${player.number}</div>
-                        <div class="text-base font-semibold ${isCourt ? 'text-white' : 'text-gray-800 dark:text-gray-200'}">${player.name}</div>
+                        <div class="flex flex-col items-end">
+                            <div class="text-base font-semibold ${isCourt ? 'text-white' : 'text-gray-800 dark:text-gray-200'}">${player.name}</div>
+                            <div class="text-xs font-medium text-gray-400">Tot. Gioco: ${totalGameTime}</div>
+                        </div>
                     </div>
                     <div class="relative flex justify-between items-center mt-auto ${isCourt ? '' : 'h-24'}">
                         ${detailsHtml}
@@ -753,6 +766,19 @@
             document.getElementById('timer-display').textContent = formatTime(quarterTime);
 
             document.getElementById('quarter-select').value = gameState.currentQuarter;
+            
+            // Aggiorna lo stato del pulsante (risolve il bug)
+            const btn = document.getElementById('start-pause-btn');
+            if (gameState.isRunning) {
+                btn.textContent = 'Pausa';
+                btn.classList.replace('bg-green-600', 'bg-red-600');
+                btn.classList.replace('hover:bg-green-700', 'hover:bg-red-700');
+            } else {
+                btn.textContent = 'Avvia';
+                btn.classList.replace('bg-red-600', 'bg-green-600');
+                btn.classList.replace('hover:bg-red-700', 'hover:bg-green-700');
+            }
+
 
             const playersInCourt = gameState.players.filter(p => p.status === 'court').sort((a, b) => a.number - b.number);
             const playersOnBench = gameState.players.filter(p => p.status === 'bench').sort((a, b) => a.number - b.number);
@@ -763,8 +789,7 @@
             courtArea.innerHTML = playersInCourt.map(renderPlayerCard).join('');
             benchArea.innerHTML = playersOnBench.map(renderPlayerCard).join('');
             
-            // Update delle stats totali (non richiesto, ma per completezza)
-            // L'implementazione completa di questa sezione è omessa per brevità, ma si baserebbe su calcTotalStats.
+            // Stats totali (Placeholder)
             const statsArea = document.getElementById('total-stats-area');
             statsArea.innerHTML = `<div class="p-3 text-sm text-gray-500 dark:text-gray-400">TGL (PMI Score) in debug mode.</div>`;
 
