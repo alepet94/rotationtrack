@@ -2138,14 +2138,16 @@ function richiestaToRow(r){
   return {
     id: r.id, cliente_id: r.clienteId, appuntamento_id: r.appuntamentoId, day: r.day,
     start_time: r.start, end_time: r.end, fascia_id: r.fasciaId || null, nota: r.nota || null, stato: r.stato,
-    letta: !!r.letta, servizio: r.servizio || null, professionista_id: r.professionistaId || null
+    letta: !!r.letta, servizio: r.servizio || null, professionista_id: r.professionistaId || null,
+    tipo: r.tipo || (r.appuntamentoId ? 'modifica' : 'nuovo')
   };
 }
 function rowToRichiesta(r){
   return {
     id: r.id, clienteId: r.cliente_id, appuntamentoId: r.appuntamento_id, day: r.day,
     start: r.start_time, end: r.end_time, fasciaId: r.fascia_id, nota: r.nota || '', stato: r.stato,
-    letta: !!r.letta, servizio: r.servizio || '', professionistaId: r.professionista_id || null
+    letta: !!r.letta, servizio: r.servizio || '', professionistaId: r.professionista_id || null,
+    tipo: r.tipo || (r.appuntamento_id ? 'modifica' : 'nuovo')
   };
 }
 function notificaToRow(n){ return { id: n.id, cliente_id: n.clienteId, testo: n.testo, letta: !!n.letta }; }
@@ -3798,13 +3800,16 @@ function renderClientWeekWorkoutsList(){
         ${avviaBtn}
         ${pending
           ? `<span class="retest-badge">Richiesta in attesa</span><button class="btn-small danger" data-annulla-rich="${pending.id}">Annulla</button>`
-          : `<button class="btn-small" data-req-modifica="${a.id}">Richiedi modifica</button>`}
+          : `<button class="btn-small" data-req-modifica="${a.id}">Richiedi modifica</button><button class="btn-small danger" data-req-cancella="${a.id}">Richiedi cancellazione</button>`}
       </div>
     </div>`;
   }).join('') : `<div class="upcoming-empty">Nessun appuntamento in questa settimana.</div>`;
 
   upBox.querySelectorAll('[data-req-modifica]').forEach(btn=>{
     btn.onclick = ()=> apriRichiestaModifica(btn.dataset.reqModifica);
+  });
+  upBox.querySelectorAll('[data-req-cancella]').forEach(btn=>{
+    btn.onclick = ()=> apriRichiestaCancellazione(btn.dataset.reqCancella);
   });
   upBox.querySelectorAll('[data-avvia-scheda]').forEach(btn=>{
     btn.onclick = ()=> apriEsecuzioneScheda(btn.dataset.avviaScheda);
@@ -4029,7 +4034,7 @@ function apriDettaglioLezione(appuntamentoId){
     html += `<div class="ev-actions" style="margin-top:10px;"><div></div>${
       pendingDet
         ? `<span class="retest-badge">Richiesta in attesa</span><button class="btn-small danger" id="btnAnnullaRichDet">Annulla</button>`
-        : `<button class="btn-small" id="btnRichiediModificaDet">Richiedi modifica</button>`
+        : `<button class="btn-small" id="btnRichiediModificaDet">Richiedi modifica</button><button class="btn-small danger" id="btnRichiediCancellaDet">Richiedi cancellazione</button>`
     }</div>`;
   }
   box.innerHTML = html;
@@ -4043,6 +4048,11 @@ function apriDettaglioLezione(appuntamentoId){
   if(btnRichDet) btnRichDet.onclick = ()=>{
     document.getElementById('lessonModal').classList.remove('open');
     apriRichiestaModifica(a.id);
+  };
+  const btnRichCancellaDet = document.getElementById('btnRichiediCancellaDet');
+  if(btnRichCancellaDet) btnRichCancellaDet.onclick = ()=>{
+    document.getElementById('lessonModal').classList.remove('open');
+    apriRichiestaCancellazione(a.id);
   };
   const btnAnnullaDet = document.getElementById('btnAnnullaRichDet');
   if(btnAnnullaDet) btnAnnullaDet.onclick = ()=>{
@@ -4440,8 +4450,10 @@ function showToast(title, body){
 function notifyNuovaRichiesta(r){
   const c = state.clienti.find(x=>x.id===r.clienteId);
   const nome = c ? c.nome : 'Un cliente';
-  const azione = r.appuntamentoId ? 'ha chiesto di spostare un appuntamento' : 'ha richiesto un nuovo appuntamento';
-  const dettaglio = `${r.day.split('-').reverse().join('/')} · ${r.start}–${r.end}${r.servizio ? ' — ' + r.servizio : ''}`;
+  const azione = r.tipo==='cancellazione' ? 'ha chiesto di cancellare un appuntamento' : (r.appuntamentoId ? 'ha chiesto di spostare un appuntamento' : 'ha richiesto un nuovo appuntamento');
+  const dettaglio = r.tipo==='cancellazione'
+    ? `${r.day.split('-').reverse().join('/')} · ${r.start}–${r.end}${r.nota ? ' — motivo: ' + r.nota : ''}`
+    : `${r.day.split('-').reverse().join('/')} · ${r.start}–${r.end}${r.servizio ? ' — ' + r.servizio : ''}`;
   showToast('Nuova richiesta', `${nome} ${azione}: ${dettaglio}`);
   if(window.Notification && Notification.permission==='granted'){
     try{ new Notification('HRL Performance Pathways — nuova richiesta', {body: `${nome} ${azione}: ${dettaglio}`}); }catch(ex){}
@@ -4534,11 +4546,16 @@ function apriRichiestaModifica(appuntamentoId, prefill){
   const todayStr = fmtDateISO(new Date());
   const defDay = a ? a.day : ((prefill && prefill.day) || todayStr);
   const defStart = a ? a.start : ((prefill && prefill.start) || '09:00');
-  const defEnd = a ? a.end : ((prefill && prefill.end) || '10:00');
+  // durata: per una modifica si preserva quella dell'appuntamento esistente
+  // (chi propone un nuovo orario per una sessione già fissata sa quanto durava);
+  // per una richiesta ex novo si usa la durata minima di un allenamento come
+  // default, perché il cliente non può sapere quanto durerà davvero — non gli
+  // si chiede quindi mai di indicare un orario di fine.
+  const durataMin = a ? (timeToMinutes(a.end) - timeToMinutes(a.start)) : (state.calSettings.minAllenamento || 60);
   const c = activeClient();
   const profOptions = clienteProfIds(c).map(id=>state.professionisti.find(p=>p.id===id)).filter(Boolean);
   const fixedProfId = a ? (a.professionistaId || profOptions[0]?.id || null) : null;
-  state.richiestaEditor = { appuntamentoId: appuntamentoId||null, propDay:defDay, propStart:defStart, propEnd:defEnd, nota:'', servizio:'', professionistaId: fixedProfId || profOptions[0]?.id || null };
+  state.richiestaEditor = { appuntamentoId: appuntamentoId||null, propDay:defDay, propStart:defStart, nota:'', servizio:'', professionistaId: fixedProfId || profOptions[0]?.id || null };
   document.getElementById('richModalTitle').textContent = a ? 'Richiedi modifica appuntamento' : 'Richiedi un appuntamento';
   const box = document.getElementById('richModalContent');
   box.innerHTML = `
@@ -4555,13 +4572,10 @@ function apriRichiestaModifica(appuntamentoId, prefill){
       <select id="richProf" class="editable">
         ${profOptions.map(p=>`<option value="${p.id}" ${state.richiestaEditor.professionistaId===p.id?'selected':''}>${p.nome}${p.area?' ('+p.area+')':''}</option>`).join('')}
       </select>
-    </div>` : ''}
+    </div>` : (!a ? `<div class="ev-field"><div style="font-size:12px;color:var(--ink-mute);">Sarai contattato dal professionista che ti segue.</div></div>` : '')}
     <div class="ev-field"><label>Giorno</label><input class="editable" type="date" id="richDay" value="${defDay}"></div>
     <div class="ev-field"><label>Orari liberi quel giorno</label><div id="richFreeSlots"></div></div>
-    <div class="ev-row">
-      <div class="ev-field"><label>Inizio</label><input class="editable" type="time" id="richStart" value="${defStart}"></div>
-      <div class="ev-field"><label>Fine</label><input class="editable" type="time" id="richEnd" value="${defEnd}"></div>
-    </div>
+    <div class="ev-field"><label>Inizio</label><input class="editable" type="time" id="richStart" value="${defStart}"></div>
     <div class="ev-field"><label>Nota (opzionale)</label><input class="editable" id="richNota" placeholder="${a ? 'es. motivo della richiesta' : 'es. di cosa vorresti parlare o su cosa lavorare'}"></div>
     <div class="ev-actions"><div></div><button class="btn-gold" id="btnInviaRichiesta">Invia richiesta</button></div>
   `;
@@ -4580,14 +4594,12 @@ function apriRichiestaModifica(appuntamentoId, prefill){
     slotsBox.innerHTML = slots.map(w=>{
       const label = `${minutesToTime(w.start)}–${minutesToTime(w.end)}`;
       const postiTxt = w.posti>1 ? ` (${w.liberi}/${w.posti} posti)` : '';
-      return `<button type="button" class="btn-small" data-slot-start="${w.start}" data-slot-end="${w.end}" style="margin:0 6px 6px 0;">${label}${postiTxt}</button>`;
+      return `<button type="button" class="btn-small" data-slot-start="${w.start}" style="margin:0 6px 6px 0;">${label}${postiTxt}</button>`;
     }).join('');
     slotsBox.querySelectorAll('[data-slot-start]').forEach(btn=>{
       btn.onclick = ()=>{
         const s = parseInt(btn.dataset.slotStart,10);
-        const e = parseInt(btn.dataset.slotEnd,10);
         document.getElementById('richStart').value = minutesToTime(s);
-        document.getElementById('richEnd').value = minutesToTime(e);
       };
     });
   }
@@ -4601,12 +4613,12 @@ function apriRichiestaModifica(appuntamentoId, prefill){
     }
     const propDay = document.getElementById('richDay').value;
     const propStart = document.getElementById('richStart').value;
-    const propEnd = document.getElementById('richEnd').value;
-    if(!propDay || !propStart || !propEnd || propEnd<=propStart){
-      alert('Controlla data e orari: l\'orario di fine deve essere dopo quello di inizio.');
+    if(!propDay || !propStart){
+      alert('Controlla giorno e orario.');
       return;
     }
-    const sMin = timeToMinutes(propStart), eMin = timeToMinutes(propEnd);
+    const sMin = timeToMinutes(propStart), eMin = sMin + durataMin;
+    const propEnd = minutesToTime(eMin);
     const profId = state.richiestaEditor.professionistaId;
     const slots = computeBookableSlots(propDay, profId, a ? a.id : null);
     const fits = slots.some(w=> sMin>=w.start && eMin<=w.end);
@@ -4615,9 +4627,10 @@ function apriRichiestaModifica(appuntamentoId, prefill){
       return;
     }
     const nuovaRichiesta = {
-      id: 'ri_' + Date.now(),
+      id: 'ri_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
       clienteId: activeClient().id,
       appuntamentoId: appuntamentoId || null,
+      tipo: a ? 'modifica' : 'nuovo',
       day: propDay, start: propStart, end: propEnd,
       fasciaId: null,
       nota: document.getElementById('richNota').value,
@@ -4635,6 +4648,46 @@ function apriRichiestaModifica(appuntamentoId, prefill){
 }
 document.getElementById('closeRich').onclick = ()=> document.getElementById('richModal').classList.remove('open');
 document.getElementById('richModal').onclick = (e)=>{ if(e.target.id==='richModal') document.getElementById('richModal').classList.remove('open'); };
+
+// richiesta di cancellazione di un appuntamento esistente, con motivo
+// obbligatorio: a differenza della modifica, qui non si propone un nuovo
+// giorno/orario — al professionista arriva solo la richiesta di annullare,
+// che lui approva (l'appuntamento viene rimosso) o rifiuta.
+function apriRichiestaCancellazione(appuntamentoId){
+  const a = state.appuntamenti.find(x=>x.id===appuntamentoId);
+  if(!a) return;
+  document.getElementById('richModalTitle').textContent = 'Richiedi cancellazione appuntamento';
+  const box = document.getElementById('richModalContent');
+  box.innerHTML = `
+    <div class="ev-field"><div style="color:var(--ink-dim);font-size:13px;">
+      Appuntamento: <b>${a.day.split('-').reverse().join('/')} · ${a.start}–${a.end}</b> — ${a.titolo||tipoLabel(a.tipo)}
+    </div></div>
+    <div class="ev-field"><label>Motivo della cancellazione</label><textarea class="editable" id="richMotivoCancella" rows="3" placeholder="es. imprevisto, indisponibilità..."></textarea></div>
+    <div class="ev-actions"><div></div><button class="btn-small danger" id="btnInviaRichiesta">Richiedi cancellazione</button></div>
+  `;
+  document.getElementById('btnInviaRichiesta').onclick = ()=>{
+    const motivo = document.getElementById('richMotivoCancella').value.trim();
+    if(!motivo){ alert('Indica il motivo della cancellazione.'); return; }
+    const nuovaRichiesta = {
+      id: 'ri_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
+      clienteId: activeClient().id,
+      appuntamentoId: a.id,
+      tipo: 'cancellazione',
+      day: a.day, start: a.start, end: a.end,
+      fasciaId: null,
+      nota: motivo,
+      servizio: '',
+      stato: 'in attesa',
+      professionistaId: a.professionistaId || null
+    };
+    state.richieste.push(nuovaRichiesta);
+    db.saveRichiesta(nuovaRichiesta);
+    document.getElementById('richModal').classList.remove('open');
+    renderRichBadge();
+    renderClientCalendar();
+  };
+  document.getElementById('richModal').classList.add('open');
+}
 
 function renderRichiesteList(){
   const box = document.getElementById('richiesteListContent');
@@ -4655,16 +4708,21 @@ function renderRichiesteList(){
     const c = state.clienti.find(x=>x.id===r.clienteId);
     const cProfId = r.professionistaId || (c ? clienteProfIds(c)[0] : null);
     const cProf = (canManageAll() && !state.calFilterProfId && cProfId) ? state.professionisti.find(p=>p.id===cProfId) : null;
-    const badgeTxt = r.appuntamentoId ? 'Richiesta di modifica' : 'Nuova richiesta appuntamento';
-    const badgeBg = r.appuntamentoId ? 'var(--ink-mute)' : 'var(--gold)';
+    const tipo = r.tipo || (r.appuntamentoId ? 'modifica' : 'nuovo');
+    const badgeTxt = tipo==='cancellazione' ? 'Richiesta di cancellazione' : (tipo==='modifica' ? 'Richiesta di modifica' : 'Nuova richiesta appuntamento');
+    const badgeBg = tipo==='cancellazione' ? '#c0453d' : (tipo==='modifica' ? 'var(--ink-mute)' : 'var(--gold)');
     return `<div class="rich-item">
       <div class="ri-top"><div class="ri-cliente">${c ? c.nome : 'Cliente eliminato'}${cProf?' · '+cProf.nome:''}</div><span style="font-size:11px;font-weight:700;padding:3px 8px;border-radius:20px;background:${badgeBg};color:#fff;white-space:nowrap;">${badgeTxt}</span></div>
-      <div class="ri-detail">${r.appuntamentoId ? `Attuale: ${a ? a.day.split('-').reverse().join('/') + ' · ' + a.start + '–' + a.end : '—'}` : '<b>Nessun appuntamento esistente</b> — richiesta di prenotazione ex novo'}</div>
-      ${r.servizio ? `<div class="ri-detail">Tipo: <b>${r.servizio}</b></div>` : ''}
-      <div class="ri-detail">Proposto: <b>${r.day.split('-').reverse().join('/')} · ${r.start}–${r.end}</b></div>
-      ${r.nota ? `<div class="ri-detail">Nota: ${r.nota}</div>` : ''}
+      ${tipo==='cancellazione'
+        ? `<div class="ri-detail">Appuntamento: <b>${a ? a.day.split('-').reverse().join('/') + ' · ' + a.start + '–' + a.end : (r.day.split('-').reverse().join('/') + ' · ' + r.start + '–' + r.end)}</b>${a ? ' — '+(a.titolo||tipoLabel(a.tipo)) : ''}</div>
+           <div class="ri-detail">Motivo: ${r.nota || '—'}</div>`
+        : `<div class="ri-detail">${r.appuntamentoId ? `Attuale: ${a ? a.day.split('-').reverse().join('/') + ' · ' + a.start + '–' + a.end : '—'}` : '<b>Nessun appuntamento esistente</b> — richiesta di prenotazione ex novo'}</div>
+           ${r.servizio ? `<div class="ri-detail">Tipo: <b>${r.servizio}</b></div>` : ''}
+           <div class="ri-detail">Proposto: <b>${r.day.split('-').reverse().join('/')} · ${r.start}–${r.end}</b></div>
+           ${r.nota ? `<div class="ri-detail">Nota: ${r.nota}</div>` : ''}`
+      }
       <div class="ri-actions">
-        <button class="btn-gold" data-approva="${r.id}">Approva</button>
+        <button class="btn-gold" data-approva="${r.id}">${tipo==='cancellazione' ? 'Conferma cancellazione' : 'Approva'}</button>
         <button class="btn-small danger" data-rifiuta="${r.id}">Rifiuta</button>
       </div>
     </div>`;
@@ -4672,7 +4730,13 @@ function renderRichiesteList(){
   box.querySelectorAll('[data-approva]').forEach(btn=>{
     btn.onclick = ()=>{
       const r = state.richieste.find(x=>x.id===btn.dataset.approva);
-      if(r.appuntamentoId){
+      const rTipo = r.tipo || (r.appuntamentoId ? 'modifica' : 'nuovo');
+      if(rTipo==='cancellazione'){
+        if(r.appuntamentoId){
+          state.appuntamenti = state.appuntamenti.filter(x=>x.id!==r.appuntamentoId);
+          db.deleteAppuntamento(r.appuntamentoId);
+        }
+      } else if(r.appuntamentoId){
         const a = state.appuntamenti.find(x=>x.id===r.appuntamentoId);
         if(a){ a.day = r.day; a.start = r.start; a.end = r.end; db.saveAppuntamento(a); }
       } else {
